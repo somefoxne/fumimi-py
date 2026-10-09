@@ -1,0 +1,8 @@
+# Discord bot dependencies
+discord.py>=2.3.0
+
+# Async HTTP client (for Danbooru API calls)
+aiohttp>=3.9.0
+
+# Load .env files
+python-dotenv>=1.0.0
