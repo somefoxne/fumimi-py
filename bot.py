@@ -1,19 +1,25 @@
 """
-Fumimi – Danbooru Discord Bot (Python rewrite)
-================================================
-Slash commands implemented:
-  /hi            – greet the bot
-  /post          – show a post by ID
-  /posts         – search posts by tags
-  /tag           – look up a tag + wiki
-  /count         – count posts matching tags
-  /related       – related tags for a query
-  /comment       – show recent comments on a post
-  /forum         – search forum topics
-  /calc          – evaluate a simple math expression
-  /say           – make the bot say something (admin)
+Fumimi – Danbooru Discord Bot (Python)
+======================================
+Tham khảo:
+  - https://github.com/danbooru/fumimi-discord
+  - https://danbooru.donmai.us/wiki_pages/help:api
 
-The bot also auto-embeds danbooru.donmai.us links pasted in chat.
+Slash commands:
+  /hi         – chào bot
+  /post       – xem post theo ID
+  /posts      – tìm kiếm post theo tags
+  /random     – post ngẫu nhiên
+  /count      – đếm post theo tags
+  /popular    – posts phổ biến hôm nay / tuần / tháng
+  /tag        – xem thông tin tag + wiki
+  /related    – tags liên quan
+  /comment    – xem comment của post
+  /forum      – tìm forum topic
+  /calc       – tính toán biểu thức
+  /say        – bot nói gì đó (cần quyền Manage Messages)
+
+Bot cũng tự động embed link danbooru.donmai.us paste vào chat.
 """
 
 import os
@@ -27,11 +33,16 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from danbooru_client import DanbooruClient
-from embeds import post_embed, tag_embed, error_embed, info_embed, truncate
+from danbooru_client import DanbooruClient, DanbooruError
+from embeds import (
+    post_embed, tag_embed, popular_embed,
+    error_embed, info_embed, truncate,
+)
 
-# ── Setup ──────────────────────────────────────────────────────────────────────
+# ── Cấu hình ───────────────────────────────────────────────────────────────────
 load_dotenv()
+
+import settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,15 +50,13 @@ logging.basicConfig(
 )
 log = logging.getLogger("fumimi")
 
-DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
-BOORU_URL = os.getenv("BOORU_URL", "https://danbooru.donmai.us")
-BOORU_DOMAINS = os.getenv("BOORU_DOMAINS", "").split() or [
-    re.sub(r"https?://", "", BOORU_URL)
-]
+DISCORD_TOKEN = settings.DISCORD_TOKEN
+BOORU_URL     = settings.get_active_booru_url()
+BOORU_DOMAINS = settings.BOORU_DOMAINS
 
-# ── Bot setup ──────────────────────────────────────────────────────────────────
+# ── Bot ────────────────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
-intents.message_content = True  # required for link auto-embed
+intents.message_content = True  # bắt buộc để đọc nội dung tin nhắn
 
 
 class FumimiBot(commands.Bot):
@@ -56,8 +65,9 @@ class FumimiBot(commands.Bot):
         self.booru = DanbooruClient()
 
     async def setup_hook(self):
+        # Sync slash commands lên Discord
         await self.tree.sync()
-        log.info("Slash commands synced.")
+        log.info("Slash commands đã sync.")
 
     async def close(self):
         await self.booru.close()
@@ -66,53 +76,46 @@ class FumimiBot(commands.Bot):
 
 bot = FumimiBot()
 
-# ── Helper to build post-link regex ───────────────────────────────────────────
-def _post_url_pattern() -> re.Pattern:
+# ── Regex nhận link danbooru ───────────────────────────────────────────────────
+def _build_post_url_re() -> re.Pattern:
     domains = "|".join(re.escape(d) for d in BOORU_DOMAINS)
     return re.compile(
         rf"https?://(?:{domains})/posts/(\d+)",
         re.IGNORECASE,
     )
 
-
-POST_URL_RE = _post_url_pattern()
+POST_URL_RE = _build_post_url_re()
 
 # ── Safe math evaluator ────────────────────────────────────────────────────────
-_SAFE_OPS = {
+_OPS = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
     ast.Mult: operator.mul,
     ast.Div: operator.truediv,
     ast.Mod: operator.mod,
     ast.Pow: operator.pow,
+    ast.FloorDiv: operator.floordiv,
     ast.USub: operator.neg,
     ast.UAdd: operator.pos,
-    ast.FloorDiv: operator.floordiv,
 }
 
-
-def _safe_eval(expr: str) -> float:
-    tree = ast.parse(expr, mode="eval")
-
+def safe_eval(expr: str) -> float:
+    """Tính toán biểu thức toán học an toàn (không dùng eval)."""
+    tree = ast.parse(expr.strip(), mode="eval")
     def _eval(node):
-        if isinstance(node, ast.Expression):
-            return _eval(node.body)
+        if isinstance(node, ast.Expression): return _eval(node.body)
         if isinstance(node, ast.Constant):
-            if isinstance(node.value, (int, float)):
-                return node.value
-            raise ValueError("Unsupported literal")
+            if isinstance(node.value, (int, float)): return node.value
+            raise ValueError("Không hỗ trợ kiểu dữ liệu này")
         if isinstance(node, ast.BinOp):
-            op = _SAFE_OPS.get(type(node.op))
-            if op is None:
-                raise ValueError(f"Unsupported operator: {type(node.op)}")
+            op = _OPS.get(type(node.op))
+            if op is None: raise ValueError(f"Toán tử không được hỗ trợ")
             return op(_eval(node.left), _eval(node.right))
         if isinstance(node, ast.UnaryOp):
-            op = _SAFE_OPS.get(type(node.op))
-            if op is None:
-                raise ValueError(f"Unsupported unary operator: {type(node.op)}")
+            op = _OPS.get(type(node.op))
+            if op is None: raise ValueError(f"Toán tử không được hỗ trợ")
             return op(_eval(node.operand))
-        raise ValueError(f"Unsupported node: {type(node)}")
-
+        raise ValueError(f"Biểu thức không hợp lệ")
     return _eval(tree)
 
 
@@ -120,248 +123,355 @@ def _safe_eval(expr: str) -> float:
 # Slash Commands
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@bot.tree.command(name="hi", description="Say hi to Fumimi")
+# ── /hi ───────────────────────────────────────────────────────────────────────
+@bot.tree.command(name="hi", description="Chào Fumimi!")
 async def cmd_hi(interaction: discord.Interaction):
     await interaction.response.send_message(
-        f"Hi, {interaction.user.mention}! I'm Fumimi, your friendly Danbooru bot. 🌸"
+        f"Chào {interaction.user.mention}! Mình là Fumimi, bot Danbooru của server này. 🌸\n"
+        f"Dùng `/posts tags:...` để tìm ảnh nhé!"
     )
 
 
-# ── /post ──────────────────────────────────────────────────────────────────────
-@bot.tree.command(name="post", description="Show a Danbooru post by ID")
-@app_commands.describe(post_id="The numeric post ID")
+# ── /post ─────────────────────────────────────────────────────────────────────
+@bot.tree.command(name="post", description="Xem một post Danbooru theo ID")
+@app_commands.describe(post_id="ID của post cần xem")
 async def cmd_post(interaction: discord.Interaction, post_id: int):
     await interaction.response.defer()
     try:
         post = await bot.booru.get_post(post_id)
         embed = post_embed(post, BOORU_URL)
         await interaction.followup.send(embed=embed)
+    except DanbooruError as e:
+        await interaction.followup.send(embed=error_embed("Không tìm thấy post", e.message))
     except Exception as e:
-        log.error("Error fetching post %s: %s", post_id, e)
-        await interaction.followup.send(
-            embed=error_embed("Post not found", f"Could not load post #{post_id}.")
-        )
+        log.exception("Lỗi khi lấy post %s", post_id)
+        await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
 
 
-# ── /posts ─────────────────────────────────────────────────────────────────────
-@bot.tree.command(name="posts", description="Search Danbooru posts by tags")
+# ── /posts ────────────────────────────────────────────────────────────────────
+@bot.tree.command(name="posts", description="Tìm kiếm post Danbooru theo tags")
 @app_commands.describe(
-    tags="Tag search query (space-separated)",
-    limit="Number of results to show (1–6)",
+    tags="Tags tìm kiếm (cách nhau bằng dấu cách, VD: hatsune_miku solo)",
+    limit="Số kết quả (1–4, mặc định 3)",
+    page="Trang kết quả (mặc định 1)",
 )
 async def cmd_posts(
     interaction: discord.Interaction,
     tags: str = "",
-    limit: app_commands.Range[int, 1, 6] = 3,
+    limit: app_commands.Range[int, 1, 4] = 3,
+    page: app_commands.Range[int, 1, 1000] = 1,
 ):
     await interaction.response.defer()
     try:
-        posts = await bot.booru.get_posts(tags=tags, limit=limit)
+        posts = await bot.booru.get_posts(tags=tags, limit=limit, page=page)
         if not posts:
             await interaction.followup.send(
-                embed=error_embed("No results", f"No posts found for `{tags or '(all)'}`.")
+                embed=error_embed("Không có kết quả", f"Không tìm thấy post nào cho `{tags or '(tất cả)'}`.")
             )
             return
         embeds = [post_embed(p, BOORU_URL) for p in posts]
-        await interaction.followup.send(embeds=embeds)
-    except Exception as e:
-        log.error("Error searching posts '%s': %s", tags, e)
+        label = f"`{tags}`" if tags else "*(tất cả)*"
         await interaction.followup.send(
-            embed=error_embed("Error", f"Failed to search for `{tags}`.")
+            content=f"🔍 Tìm thấy {len(posts)} kết quả cho {label} (trang {page})",
+            embeds=embeds,
         )
+    except DanbooruError as e:
+        await interaction.followup.send(embed=error_embed("Lỗi API", e.message))
+    except Exception as e:
+        log.exception("Lỗi /posts tags=%s", tags)
+        await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
 
 
-# ── /count ─────────────────────────────────────────────────────────────────────
-@bot.tree.command(name="count", description="Count Danbooru posts matching tags")
-@app_commands.describe(tags="Tag search query (space-separated)")
+# ── /random ───────────────────────────────────────────────────────────────────
+@bot.tree.command(name="random", description="Xem một post ngẫu nhiên từ Danbooru")
+@app_commands.describe(tags="Tags lọc (không bắt buộc)")
+async def cmd_random(interaction: discord.Interaction, tags: str = ""):
+    await interaction.response.defer()
+    try:
+        post = await bot.booru.get_random_post(tags=tags)
+        embed = post_embed(post, BOORU_URL)
+        label = f" với tags `{tags}`" if tags else ""
+        await interaction.followup.send(
+            content=f"🎲 Post ngẫu nhiên{label}:",
+            embed=embed,
+        )
+    except DanbooruError as e:
+        await interaction.followup.send(embed=error_embed("Lỗi", e.message))
+    except Exception as e:
+        log.exception("Lỗi /random tags=%s", tags)
+        await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
+
+
+# ── /count ────────────────────────────────────────────────────────────────────
+@bot.tree.command(name="count", description="Đếm số post theo tags")
+@app_commands.describe(tags="Tags tìm kiếm (không bắt buộc)")
 async def cmd_count(interaction: discord.Interaction, tags: str = ""):
     await interaction.response.defer()
     try:
         count = await bot.booru.get_post_count(tags=tags)
-        label = f"`{tags}`" if tags else "all posts"
-        embed = info_embed(
-            "Post Count",
-            f"**{count:,}** posts matching {label}",
+        label = f"`{tags}`" if tags else "tất cả posts"
+        search_url = f"{BOORU_URL}/posts?tags={tags}" if tags else f"{BOORU_URL}/posts"
+        embed = discord.Embed(
+            title="📊 Số lượng post",
+            description=f"**[{count:,} posts]({search_url})** khớp với {label}",
             color=0x5865F2,
         )
         embed.set_footer(text=f"danbooru • {BOORU_URL}")
         await interaction.followup.send(embed=embed)
+    except DanbooruError as e:
+        await interaction.followup.send(embed=error_embed("Lỗi API", e.message))
     except Exception as e:
-        log.error("Error counting posts '%s': %s", tags, e)
+        log.exception("Lỗi /count tags=%s", tags)
+        await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
+
+
+# ── /popular ──────────────────────────────────────────────────────────────────
+@bot.tree.command(name="popular", description="Xem posts phổ biến trên Danbooru")
+@app_commands.describe(
+    scale="Khoảng thời gian: day (ngày), week (tuần), month (tháng)",
+    date="Ngày cụ thể (YYYY-MM-DD, mặc định hôm nay)",
+)
+@app_commands.choices(scale=[
+    app_commands.Choice(name="Hôm nay", value="day"),
+    app_commands.Choice(name="Tuần này", value="week"),
+    app_commands.Choice(name="Tháng này", value="month"),
+])
+async def cmd_popular(
+    interaction: discord.Interaction,
+    scale: str = "day",
+    date: str = None,
+):
+    await interaction.response.defer()
+    try:
+        posts = await bot.booru.get_popular_posts(date=date, scale=scale, limit=4)
+        if not posts:
+            await interaction.followup.send(
+                embed=error_embed("Không có dữ liệu", "Không có posts phổ biến nào.")
+            )
+            return
+        scale_label = {"day": "hôm nay", "week": "tuần này", "month": "tháng này"}.get(scale, scale)
+        embeds = [post_embed(p, BOORU_URL) for p in posts]
         await interaction.followup.send(
-            embed=error_embed("Error", "Could not fetch post count.")
+            content=f"🔥 **Posts phổ biến {scale_label}** ({date or 'hôm nay'}):",
+            embeds=embeds,
         )
+    except DanbooruError as e:
+        await interaction.followup.send(embed=error_embed("Lỗi API", e.message))
+    except Exception as e:
+        log.exception("Lỗi /popular scale=%s", scale)
+        await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
 
 
-# ── /tag ───────────────────────────────────────────────────────────────────────
-@bot.tree.command(name="tag", description="Look up a Danbooru tag and its wiki")
-@app_commands.describe(name="The tag name (use underscores)")
+# ── /tag ──────────────────────────────────────────────────────────────────────
+@bot.tree.command(name="tag", description="Xem thông tin tag và wiki Danbooru")
+@app_commands.describe(name="Tên tag (dùng underscore, VD: hatsune_miku)")
 async def cmd_tag(interaction: discord.Interaction, name: str):
     await interaction.response.defer()
-    tag_name = name.lower().replace(" ", "_")
+    tag_name = name.lower().strip().replace(" ", "_")
     try:
         tag = await bot.booru.get_tag(tag_name)
         if not tag:
             await interaction.followup.send(
-                embed=error_embed("Tag not found", f"No tag named `{tag_name}`.")
+                embed=error_embed("Không tìm thấy tag", f"Tag `{tag_name}` không tồn tại.")
             )
             return
         wiki = await bot.booru.get_wiki(tag_name)
         embed = tag_embed(tag, wiki, BOORU_URL)
         await interaction.followup.send(embed=embed)
+    except DanbooruError as e:
+        await interaction.followup.send(embed=error_embed("Lỗi API", e.message))
     except Exception as e:
-        log.error("Error fetching tag '%s': %s", tag_name, e)
-        await interaction.followup.send(
-            embed=error_embed("Error", f"Failed to look up `{tag_name}`.")
-        )
+        log.exception("Lỗi /tag name=%s", tag_name)
+        await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
 
 
-# ── /related ───────────────────────────────────────────────────────────────────
-@bot.tree.command(name="related", description="Show tags related to a query")
+# ── /related ──────────────────────────────────────────────────────────────────
+@bot.tree.command(name="related", description="Xem các tags liên quan")
 @app_commands.describe(
-    tags="Tag query",
-    category="Filter by category (general/artist/copyright/character)",
+    tags="Tag query cần tìm liên quan",
+    category="Lọc theo loại tag (không bắt buộc)",
 )
+@app_commands.choices(category=[
+    app_commands.Choice(name="General",   value="general"),
+    app_commands.Choice(name="Artist",    value="artist"),
+    app_commands.Choice(name="Copyright", value="copyright"),
+    app_commands.Choice(name="Character", value="character"),
+    app_commands.Choice(name="Meta",      value="meta"),
+])
 async def cmd_related(
     interaction: discord.Interaction,
     tags: str,
     category: str = None,
 ):
     await interaction.response.defer()
-    category_map = {
-        "general": "general",
-        "artist": "artist",
-        "copyright": "copyright",
-        "character": "character",
-        "meta": "meta",
-    }
-    cat = category_map.get((category or "").lower())
     try:
-        data = await bot.booru.get_related_tags(tags, cat)
+        data = await bot.booru.get_related_tags(tags, category)
         related = data.get("related_tags", [])[:15]
         if not related:
             await interaction.followup.send(
-                embed=error_embed("No related tags", f"No related tags found for `{tags}`.")
+                embed=error_embed("Không có kết quả", f"Không tìm thấy tags liên quan cho `{tags}`.")
             )
             return
-        lines = [
-            f"`{rt['tag']['name']}` — {rt['tag']['post_count']:,} posts"
-            for rt in related
-            if "tag" in rt
-        ]
-        embed = info_embed(
-            f"Related tags for: {tags}",
-            "\n".join(lines) or "None",
+
+        CAT_LABELS = {0: "General", 1: "Artist", 3: "Copyright", 4: "Character", 5: "Meta"}
+        CAT_COLORS = {0: 0xB0C4DE, 1: 0xFF0000, 3: 0x9400D3, 4: 0x00AA00, 5: 0xFF8C00}
+        lines = []
+        for rt in related:
+            t = rt.get("tag", {})
+            tname = t.get("name", "?")
+            count = t.get("post_count", 0)
+            cat   = t.get("category", 0)
+            score = rt.get("cosine_similarity", 0)
+            lines.append(f"`{tname}` — {count:,} posts | {CAT_LABELS.get(cat,'?')} | {score:.2f}")
+
+        embed = discord.Embed(
+            title=f"🔗 Tags liên quan: {tags}",
+            url=f"{BOORU_URL}/related_tag?query={tags}",
+            description="\n".join(lines),
             color=0x9400D3,
         )
-        embed.set_footer(text=f"danbooru • {BOORU_URL}")
+        if category:
+            embed.set_footer(text=f"Lọc theo: {category}")
         await interaction.followup.send(embed=embed)
+    except DanbooruError as e:
+        await interaction.followup.send(embed=error_embed("Lỗi API", e.message))
     except Exception as e:
-        log.error("Error getting related tags '%s': %s", tags, e)
-        await interaction.followup.send(
-            embed=error_embed("Error", f"Failed to get related tags for `{tags}`.")
-        )
+        log.exception("Lỗi /related tags=%s", tags)
+        await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
 
 
-# ── /comment ───────────────────────────────────────────────────────────────────
-@bot.tree.command(name="comment", description="Show recent comments on a post")
-@app_commands.describe(post_id="Post ID to fetch comments for")
+# ── /comment ──────────────────────────────────────────────────────────────────
+@bot.tree.command(name="comment", description="Xem các comment mới nhất của một post")
+@app_commands.describe(post_id="ID của post cần xem comment")
 async def cmd_comment(interaction: discord.Interaction, post_id: int):
     await interaction.response.defer()
     try:
         comments = await bot.booru.get_comments(post_id=post_id, limit=5)
         if not comments:
             await interaction.followup.send(
-                embed=error_embed("No comments", f"No comments found for post #{post_id}.")
+                embed=error_embed("Không có comment", f"Post #{post_id} chưa có comment nào.")
             )
             return
         embed = discord.Embed(
-            title=f"Comments on Post #{post_id}",
+            title=f"💬 Comments – Post #{post_id}",
             url=f"{BOORU_URL}/posts/{post_id}",
             color=0x5865F2,
         )
         for c in comments:
             creator = c.get("creator", {})
             author = creator.get("name", "Anonymous") if isinstance(creator, dict) else str(creator)
-            body = truncate(c.get("body", ""), 256)
-            embed.add_field(name=author, value=body, inline=False)
+            body = truncate(c.get("body", "*(trống)*"), 300)
+            score = c.get("score", 0)
+            score_str = f" ({'+'if score>=0 else ''}{score})" if score != 0 else ""
+            embed.add_field(
+                name=f"{author}{score_str}",
+                value=body,
+                inline=False,
+            )
+        embed.set_footer(text=f"danbooru • Post #{post_id}")
         await interaction.followup.send(embed=embed)
+    except DanbooruError as e:
+        await interaction.followup.send(embed=error_embed("Lỗi API", e.message))
     except Exception as e:
-        log.error("Error fetching comments for post %s: %s", post_id, e)
-        await interaction.followup.send(
-            embed=error_embed("Error", f"Failed to load comments for post #{post_id}.")
-        )
+        log.exception("Lỗi /comment post_id=%s", post_id)
+        await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
 
 
-# ── /forum ─────────────────────────────────────────────────────────────────────
-@bot.tree.command(name="forum", description="Search Danbooru forum topics")
-@app_commands.describe(query="Keyword to search for in forum topics")
+# ── /forum ────────────────────────────────────────────────────────────────────
+@bot.tree.command(name="forum", description="Tìm kiếm forum topic Danbooru")
+@app_commands.describe(query="Từ khóa tìm kiếm (không bắt buộc)")
 async def cmd_forum(interaction: discord.Interaction, query: str = ""):
     await interaction.response.defer()
     try:
         topics = await bot.booru.get_forum_topics(query=query, limit=5)
         if not topics:
             await interaction.followup.send(
-                embed=error_embed("No results", f"No forum topics found for `{query}`.")
+                embed=error_embed("Không có kết quả", f"Không tìm thấy topic nào cho `{query}`.")
             )
             return
         embed = discord.Embed(
-            title=f"Forum Topics: {query or '(recent)'}",
+            title=f"📋 Forum Topics" + (f": {query}" if query else ""),
             url=f"{BOORU_URL}/forum_topics",
             color=0xFF8C00,
         )
         for t in topics:
-            title = t.get("title", "Untitled")
+            title    = t.get("title", "Không có tiêu đề")
             topic_id = t.get("id")
+            response_count = t.get("response_count", 0)
             url = f"{BOORU_URL}/forum_topics/{topic_id}"
             embed.add_field(
-                name=title,
-                value=f"[#{topic_id}]({url})",
+                name=f"#{topic_id} – {truncate(title, 50)}",
+                value=f"[Xem topic]({url}) • {response_count} replies",
                 inline=False,
             )
+        embed.set_footer(text=f"danbooru • {BOORU_URL}")
         await interaction.followup.send(embed=embed)
+    except DanbooruError as e:
+        await interaction.followup.send(embed=error_embed("Lỗi API", e.message))
     except Exception as e:
-        log.error("Error searching forum '%s': %s", query, e)
-        await interaction.followup.send(
-            embed=error_embed("Error", "Failed to search forum topics.")
-        )
+        log.exception("Lỗi /forum query=%s", query)
+        await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
 
 
-# ── /calc ──────────────────────────────────────────────────────────────────────
-@bot.tree.command(name="calc", description="Evaluate a math expression")
-@app_commands.describe(expression="A math expression, e.g. 2 ** 10 + 5 * 3")
+# ── /calc ─────────────────────────────────────────────────────────────────────
+@bot.tree.command(name="calc", description="Tính toán biểu thức toán học")
+@app_commands.describe(expression="Biểu thức toán học, VD: 2**10 + 5*3")
 async def cmd_calc(interaction: discord.Interaction, expression: str):
     try:
-        result = _safe_eval(expression)
-        # Format nicely
+        result = safe_eval(expression)
         if isinstance(result, float) and result.is_integer():
             result_str = f"{int(result):,}"
         else:
-            result_str = f"{result:,.6g}"
-        embed = info_embed(
-            "Calculator",
-            f"`{expression}` = **{result_str}**",
+            result_str = f"{result:,.8g}"
+        embed = discord.Embed(
+            title="🔢 Máy tính",
+            description=f"`{expression}` = **{result_str}**",
             color=0x00AA00,
         )
         await interaction.response.send_message(embed=embed)
+    except ZeroDivisionError:
+        await interaction.response.send_message(
+            embed=error_embed("Lỗi", "Không thể chia cho 0."), ephemeral=True
+        )
     except Exception as e:
         await interaction.response.send_message(
-            embed=error_embed("Invalid expression", f"`{expression}` could not be evaluated.\n{e}"),
-            ephemeral=True,
+            embed=error_embed("Biểu thức không hợp lệ", f"`{expression}`\n{e}"), ephemeral=True
         )
 
 
-# ── /say ───────────────────────────────────────────────────────────────────────
-@bot.tree.command(name="say", description="Make Fumimi say something (Manage Messages required)")
-@app_commands.describe(message="What should Fumimi say?")
+# ── /say ──────────────────────────────────────────────────────────────────────
+@bot.tree.command(name="say", description="Cho Fumimi nói gì đó (cần quyền Manage Messages)")
+@app_commands.describe(message="Nội dung cần nói")
 @app_commands.default_permissions(manage_messages=True)
 async def cmd_say(interaction: discord.Interaction, message: str):
-    await interaction.response.send_message("✅ Sent!", ephemeral=True)
+    await interaction.response.send_message("✅ Đã gửi!", ephemeral=True)
     await interaction.channel.send(message)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Auto-embed: danbooru post links
+# Autocomplete cho /posts và /tag
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@cmd_posts.autocomplete("tags")
+@cmd_random.autocomplete("tags")
+async def autocomplete_tags(interaction: discord.Interaction, current: str):
+    if not current or len(current) < 2:
+        return []
+    try:
+        results = await bot.booru.autocomplete_tags(current, limit=10)
+        return [
+            app_commands.Choice(
+                name=f"{r.get('value', '')} ({r.get('post_count', 0):,})",
+                value=r.get("value", ""),
+            )
+            for r in results
+        ][:25]
+    except Exception:
+        return []
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Auto-embed: tự động nhận và embed link Danbooru post
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @bot.event
@@ -372,12 +482,14 @@ async def on_message(message: discord.Message):
     matches = POST_URL_RE.findall(message.content)
     if matches:
         embeds = []
-        for post_id_str in matches[:3]:  # max 3 embeds per message
+        for post_id_str in matches[:3]:  # tối đa 3 embed mỗi tin
             try:
                 post = await bot.booru.get_post(int(post_id_str))
                 embeds.append(post_embed(post, BOORU_URL))
+            except DanbooruError as e:
+                log.warning("Không embed được post %s: %s", post_id_str, e.message)
             except Exception as e:
-                log.warning("Could not embed post %s: %s", post_id_str, e)
+                log.warning("Lỗi embed post %s: %s", post_id_str, e)
         if embeds:
             await message.reply(embeds=embeds, mention_author=False)
 
@@ -385,13 +497,13 @@ async def on_message(message: discord.Message):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Lifecycle events
+# Bot events
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @bot.event
 async def on_ready():
-    log.info("Logged in as %s (ID: %s)", bot.user, bot.user.id)
-    log.info("Connected to %d guild(s).", len(bot.guilds))
+    log.info("✅ Đăng nhập thành công: %s (ID: %s)", bot.user, bot.user.id)
+    log.info("📡 Đang kết nối với %d server(s).", len(bot.guilds))
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.watching,
