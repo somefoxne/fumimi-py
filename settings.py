@@ -63,6 +63,6 @@ def get_active_apikey() -> str:
 
 # ── Override từ usersettings.py (nếu có) ──────────────────────────────────────
 try:
-    from usersettings import *  # noqa: F401, F403
+    from usersettings import *  # type: ignore # noqa: F401, F403
 except ImportError:
     pass
