@@ -30,6 +30,7 @@ import logging
 import asyncio
 import discord
 from discord import app_commands
+from discord.ext import commands
 import unicodedata
 import urllib.parse
 from dotenv import load_dotenv
