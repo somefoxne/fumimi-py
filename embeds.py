@@ -127,13 +127,22 @@ def post_embed(
     embed.add_field(name="Favs",   value=f"{post.get('fav_count', 0):,}",            inline=True)
 
     # Uploader
-    uploader = post.get("uploader") or {}
-    if isinstance(uploader, dict):
-        uname = uploader.get("name", "Unknown")
+    uploader = post.get("uploader")
+    if isinstance(uploader, dict) and uploader:
+        uname = uploader.get("name") or f"User #{uploader.get('id', '?')}"
         uid   = uploader.get("id")
         ulink = f"[{uname}]({booru_url}/users/{uid})" if uid else uname
-    else:
+    elif post.get("uploader_name"):
+        uname = post.get("uploader_name")
+        uid   = post.get("uploader_id")
+        ulink = f"[{uname}]({booru_url}/users/{uid})" if uid else uname
+    elif post.get("uploader_id"):
+        uid = post.get("uploader_id")
+        ulink = f"[User #{uid}]({booru_url}/users/{uid})"
+    elif uploader:
         ulink = str(uploader)
+    else:
+        ulink = "Unknown"
     embed.add_field(name="Uploader", value=ulink, inline=True)
 
     # Source

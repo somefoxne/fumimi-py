@@ -78,15 +78,17 @@ class DanbooruClient:
                 pass
             raise DanbooruError(resp.status, friendly)
 
-    # ... [Các phương thức còn lại giữ nguyên] ...
-    async def get_posts(self, tags: str = "", limit: int = 6, page: int | str = 1, only: str = "id,uploader,created_at,score,fav_count,tag_string,rating,media_asset") -> list[dict]:
-        return await self.get("posts", {"tags": tags or None, "limit": limit, "page": page, "only": only})
+    POST_FIELDS = "id,uploader,created_at,score,fav_count,tag_string,rating,media_asset,source,file_url,large_file_url"
+
+    async def get_posts(self, tags: str = "", limit: int = 6, page: int | str = 1, only: str = None) -> list[dict]:
+        fields = only or self.POST_FIELDS
+        return await self.get("posts", {"tags": tags or None, "limit": limit, "page": page, "only": fields})
 
     async def get_post(self, post_id: int) -> dict:
-        return await self.get(f"posts/{post_id}")
+        return await self.get(f"posts/{post_id}", {"only": self.POST_FIELDS})
 
     async def get_random_post(self, tags: str = "") -> dict:
-        return await self.get("posts/random", {"tags": tags or None})
+        return await self.get("posts/random", {"tags": tags or None, "only": self.POST_FIELDS})
 
     async def get_post_count(self, tags: str = "") -> int:
         data = await self.get("counts/posts", {"tags": tags or None})
@@ -122,7 +124,7 @@ class DanbooruClient:
         return await self.get(f"forum_posts/{post_id}", {"only": "id,body,created_at,creator,topic"})
 
     async def get_popular_posts(self, date: str = None, scale: str = "day", limit: int = 4) -> list[dict]:
-        return await self.get("explore/posts/popular", {"date": date, "scale": scale, "limit": limit})
+        return await self.get("explore/posts/popular", {"date": date, "scale": scale, "limit": limit, "only": self.POST_FIELDS})
 
     async def autocomplete_tags(self, query: str, limit: int = 10) -> list[dict]:
         return await self.get("autocomplete", {"search[query]": query, "search[type]": "tag_query", "limit": limit})
