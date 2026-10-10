@@ -364,7 +364,8 @@ async def cmd_tag(interaction: discord.Interaction, name: str):
 async def _handle_related_tags(interaction: discord.Interaction, tags: str, category: str = None):
     await interaction.response.defer()
     try:
-        data = await bot.booru.get_related_tags(tags, category)
+        cat_param = None if (category is None or category == "all") else category
+        data = await bot.booru.get_related_tags(tags, cat_param)
         related = data.get("related_tags", [])[:15]
         if not related:
             await interaction.followup.send(
@@ -388,7 +389,7 @@ async def _handle_related_tags(interaction: discord.Interaction, tags: str, cate
             description="\n".join(lines),
             color=0x9400D3,
         )
-        if category:
+        if category and category != "all":
             embed.set_footer(text=f"Lọc theo: {category}")
         await interaction.followup.send(embed=embed)
     except DanbooruError as e:
@@ -401,9 +402,10 @@ async def _handle_related_tags(interaction: discord.Interaction, tags: str, cate
 @bot.tree.command(name="related_tags", description="Xem danh sách các tags liên quan")
 @app_commands.describe(
     tags="Tag query cần tìm liên quan",
-    category="Lọc theo loại tag (không bắt buộc)",
+    category="Lọc theo loại tag (không bắt buộc, mặc định: Tất cả)",
 )
 @app_commands.choices(category=[
+    app_commands.Choice(name="Tất cả (All)", value="all"),
     app_commands.Choice(name="General",   value="general"),
     app_commands.Choice(name="Artist",    value="artist"),
     app_commands.Choice(name="Copyright", value="copyright"),
@@ -421,9 +423,10 @@ async def cmd_related_tags(
 @bot.tree.command(name="related", description="Xem danh sách các tags liên quan (viết tắt)")
 @app_commands.describe(
     tags="Tag query cần tìm liên quan",
-    category="Lọc theo loại tag (không bắt buộc)",
+    category="Lọc theo loại tag (không bắt buộc, mặc định: Tất cả)",
 )
 @app_commands.choices(category=[
+    app_commands.Choice(name="Tất cả (All)", value="all"),
     app_commands.Choice(name="General",   value="general"),
     app_commands.Choice(name="Artist",    value="artist"),
     app_commands.Choice(name="Copyright", value="copyright"),
@@ -566,17 +569,70 @@ async def cmd_top_uploaders(
     await _handle_top_uploaders(interaction, tags, limit)
 
 
-@bot.tree.command(name="top_upload", description="Show top uploaders for a tag search (alias).")
+# ── /top_upload ───────────────────────────────────────────────────────────────
+@bot.tree.command(name="top_upload", description="Xem các tag được tải lên nhiều nhất của một người dùng")
 @app_commands.describe(
-    tags="Tags to search for.",
-    limit="Number of uploaders to show (default: 25).",
+    user="Tên người dùng Danbooru (hoặc user:tên)",
+    category="Lọc theo loại tag (không bắt buộc, mặc định: Tất cả)",
+    limit="Số lượng tag hiển thị (1–25, mặc định 15)",
 )
+@app_commands.choices(category=[
+    app_commands.Choice(name="Tất cả (All)", value="all"),
+    app_commands.Choice(name="General",   value="general"),
+    app_commands.Choice(name="Artist",    value="artist"),
+    app_commands.Choice(name="Copyright", value="copyright"),
+    app_commands.Choice(name="Character", value="character"),
+    app_commands.Choice(name="Meta",      value="meta"),
+])
 async def cmd_top_upload(
     interaction: discord.Interaction,
-    tags: str = "",
-    limit: app_commands.Range[int, 0, 25] = 25,
+    user: str,
+    category: str = None,
+    limit: app_commands.Range[int, 1, 25] = 15,
 ):
-    await _handle_top_uploaders(interaction, tags, limit)
+    await interaction.response.defer()
+    try:
+        user_clean = user.strip()
+        query = user_clean if user_clean.startswith("user:") else f"user:{user_clean}"
+        cat_param = None if (category is None or category == "all") else category
+
+        total_posts = await bot.booru.get_post_count(tags=query)
+        data = await bot.booru.get_related_tags(query, cat_param)
+        related = data.get("related_tags", [])[:limit]
+
+        if not related:
+            await interaction.followup.send(
+                embed=error_embed("Không có kết quả", f"Không tìm thấy dữ liệu upload nào cho `{user_clean}`.")
+            )
+            return
+
+        CAT_LABELS = {0: "General", 1: "Artist", 3: "Copyright", 4: "Character", 5: "Meta"}
+        lines = []
+        for i, rt in enumerate(related, start=1):
+            t = rt.get("tag", {})
+            tname = t.get("name", "?")
+            count = t.get("post_count", 0)
+            cat   = t.get("category", 0)
+            score = rt.get("cosine_similarity", 0)
+            lines.append(f"`#{i:<2}` `{tname}` — {count:,} posts | {CAT_LABELS.get(cat, 'General')} | {score:.2f}")
+
+        cat_desc = f" • Thể loại: **{category.title()}**" if (category and category != "all") else ""
+        desc = f"👤 Người dùng: **[{user_clean}]({BOORU_URL}/posts?tags={query})** • Tổng: **{total_posts:,} bài**{cat_desc}\n\n" + "\n".join(lines)
+
+        embed = discord.Embed(
+            title=f"📊 Top Upload của {user_clean}",
+            url=f"{BOORU_URL}/posts?tags={query}",
+            description=desc,
+            color=0x206694,
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.set_footer(text=f"danbooru • {BOORU_URL} • {len(related)} tags")
+        await interaction.followup.send(embed=embed)
+    except DanbooruError as e:
+        await interaction.followup.send(embed=error_embed("Lỗi API", e.message))
+    except Exception as e:
+        log.exception("Lỗi /top_upload user=%s", user)
+        await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
 
 
 # ── /comment ──────────────────────────────────────────────────────────────────
@@ -696,7 +752,6 @@ async def cmd_say(interaction: discord.Interaction, message: str):
 @cmd_related_tags.autocomplete("tags")
 @cmd_related.autocomplete("tags")
 @cmd_top_uploaders.autocomplete("tags")
-@cmd_top_upload.autocomplete("tags")
 async def autocomplete_tags(interaction: discord.Interaction, current: str):
     if not current or len(current) < 2:
         return []
