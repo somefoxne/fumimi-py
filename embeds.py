@@ -292,6 +292,11 @@ def info_embed(title: str, description: str, color: int = 0x5865F2) -> discord.E
     return discord.Embed(title=title, description=description, color=color)
 
 
+def popular_embed(posts: list[dict], scale: str = "day", date: str = None, booru_url: str = "https://danbooru.donmai.us") -> list[discord.Embed]:
+    """Hàm tạo danh sách embed cho posts phổ biến (dự phòng tương thích)."""
+    return [post_embed(p, booru_url) for p in posts]
+
+
 def truncate(text: str, max_len: int = 1024) -> str:
     """Cắt ngắn text để vừa Discord embed field."""
     if len(text) <= max_len:

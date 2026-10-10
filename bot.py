@@ -35,7 +35,7 @@ from dotenv import load_dotenv
 
 from danbooru_client import DanbooruClient, DanbooruError
 from embeds import (
-    post_embed, tag_embed, popular_embed,
+    post_embed, tag_embed,
     error_embed, info_embed, truncate,
     prepare_post_display, PostView, MultiPostView,
 )
