@@ -553,13 +553,23 @@ async def on_message(message: discord.Message):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Bot events
+# Bot events & Sync quản trị
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @bot.event
 async def on_ready():
     log.info("✅ Đăng nhập thành công: %s (ID: %s)", bot.user, bot.user.id)
     log.info("📡 Đang kết nối với %d server(s).", len(bot.guilds))
+
+    # Tự động đồng bộ vào từng server để xóa sạch command Ruby cũ và kích hoạt command mới tức thì
+    for guild in bot.guilds:
+        try:
+            bot.tree.copy_global_to(guild=guild)
+            synced = await bot.tree.sync(guild=guild)
+            log.info("Đã đồng bộ %d lệnh mới cho server: %s (%d)", len(synced), guild.name, guild.id)
+        except Exception as e:
+            log.warning("Không thể sync cho server %s: %s", guild.name, e)
+
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.watching,
@@ -568,8 +578,44 @@ async def on_ready():
     )
 
 
+@bot.command(name="sync")
+async def cmd_manual_sync(ctx: commands.Context):
+    """
+    Lệnh !sync: Dùng trong chat Discord để cưỡng chế dọn sạch command Ruby cũ
+    và cập nhật toàn bộ slash command mới ngay lập tức.
+    """
+    if not ctx.author.guild_permissions.administrator and not await bot.is_owner(ctx.author):
+        await ctx.send("❌ Bạn cần quyền Quản trị viên (Administrator) để dùng lệnh này.")
+        return
+
+    msg = await ctx.send("🔄 Đang dọn sạch lệnh cũ từ bot Ruby và cập nhật lệnh mới...")
+    try:
+        # Xóa sạch các lệnh cũ của server
+        bot.tree.clear_commands(guild=ctx.guild)
+        await bot.tree.sync(guild=ctx.guild)
+
+        # Chép toàn bộ lệnh mới vào server này
+        bot.tree.copy_global_to(guild=ctx.guild)
+        synced = await bot.tree.sync(guild=ctx.guild)
+
+        # Đồng bộ global
+        await bot.tree.sync()
+
+        await msg.edit(
+            content=(
+                f"✅ **Thành công!** Đã xóa sạch lệnh cũ và kích hoạt **{len(synced)}** lệnh mới cho server!\n"
+                f"*(Nếu chưa thấy đổi ngay, hãy bấm **Ctrl + R** trên Discord để làm mới bộ nhớ đệm nhé)*"
+            )
+        )
+    except Exception as e:
+        log.exception("Lỗi khi sync commands: %s", e)
+        await msg.edit(content=f"❌ Lỗi khi đồng bộ: {e}")
+
+
 @bot.event
 async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return
     log.error("Command error: %s", error)
 
 
@@ -579,3 +625,4 @@ async def on_command_error(ctx, error):
 
 if __name__ == "__main__":
     bot.run(DISCORD_TOKEN, log_handler=None)
+
