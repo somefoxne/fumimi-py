@@ -129,3 +129,14 @@ class DanbooruClient:
 
     async def get_bulk_update_requests(self, limit: int = 5, status: str = "pending") -> list[dict]:
         return await self.get("bulk_update_requests", {"search[status]": status, "only": "id,script,user,forum_topic,created_at,status", "limit": limit})
+
+    async def get_top_uploaders(self, tags: str = "", limit: int = 10, from_date: str = "2005-05-24") -> list[dict]:
+        """Lấy danh sách Top Uploaders từ Danbooru reports API."""
+        params = {
+            "search[group]": "uploader",
+            "search[group_limit]": limit,
+            "search[from]": from_date,
+        }
+        if tags:
+            params["search[tags]"] = tags
+        return await self.get("reports/posts", params)

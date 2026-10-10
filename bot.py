@@ -358,24 +358,8 @@ async def cmd_tag(interaction: discord.Interaction, name: str):
         await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
 
 
-# ── /related ──────────────────────────────────────────────────────────────────
-@bot.tree.command(name="related", description="Xem các tags liên quan")
-@app_commands.describe(
-    tags="Tag query cần tìm liên quan",
-    category="Lọc theo loại tag (không bắt buộc)",
-)
-@app_commands.choices(category=[
-    app_commands.Choice(name="General",   value="general"),
-    app_commands.Choice(name="Artist",    value="artist"),
-    app_commands.Choice(name="Copyright", value="copyright"),
-    app_commands.Choice(name="Character", value="character"),
-    app_commands.Choice(name="Meta",      value="meta"),
-])
-async def cmd_related(
-    interaction: discord.Interaction,
-    tags: str,
-    category: str = None,
-):
+# ── /related_tags / /related ──────────────────────────────────────────────────
+async def _handle_related_tags(interaction: discord.Interaction, tags: str, category: str = None):
     await interaction.response.defer()
     try:
         data = await bot.booru.get_related_tags(tags, category)
@@ -387,7 +371,6 @@ async def cmd_related(
             return
 
         CAT_LABELS = {0: "General", 1: "Artist", 3: "Copyright", 4: "Character", 5: "Meta"}
-        CAT_COLORS = {0: 0xB0C4DE, 1: 0xFF0000, 3: 0x9400D3, 4: 0x00AA00, 5: 0xFF8C00}
         lines = []
         for rt in related:
             t = rt.get("tag", {})
@@ -409,7 +392,94 @@ async def cmd_related(
     except DanbooruError as e:
         await interaction.followup.send(embed=error_embed("Lỗi API", e.message))
     except Exception as e:
-        log.exception("Lỗi /related tags=%s", tags)
+        log.exception("Lỗi /related_tags tags=%s", tags)
+        await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
+
+
+@bot.tree.command(name="related_tags", description="Xem danh sách các tags liên quan")
+@app_commands.describe(
+    tags="Tag query cần tìm liên quan",
+    category="Lọc theo loại tag (không bắt buộc)",
+)
+@app_commands.choices(category=[
+    app_commands.Choice(name="General",   value="general"),
+    app_commands.Choice(name="Artist",    value="artist"),
+    app_commands.Choice(name="Copyright", value="copyright"),
+    app_commands.Choice(name="Character", value="character"),
+    app_commands.Choice(name="Meta",      value="meta"),
+])
+async def cmd_related_tags(
+    interaction: discord.Interaction,
+    tags: str,
+    category: str = None,
+):
+    await _handle_related_tags(interaction, tags, category)
+
+
+@bot.tree.command(name="related", description="Xem danh sách các tags liên quan (viết tắt)")
+@app_commands.describe(
+    tags="Tag query cần tìm liên quan",
+    category="Lọc theo loại tag (không bắt buộc)",
+)
+@app_commands.choices(category=[
+    app_commands.Choice(name="General",   value="general"),
+    app_commands.Choice(name="Artist",    value="artist"),
+    app_commands.Choice(name="Copyright", value="copyright"),
+    app_commands.Choice(name="Character", value="character"),
+    app_commands.Choice(name="Meta",      value="meta"),
+])
+async def cmd_related(
+    interaction: discord.Interaction,
+    tags: str,
+    category: str = None,
+):
+    await _handle_related_tags(interaction, tags, category)
+
+
+# ── /top_upload ───────────────────────────────────────────────────────────────
+@bot.tree.command(name="top_upload", description="Bảng xếp hạng những người tải lên nhiều nhất")
+@app_commands.describe(
+    tags="Tag tìm kiếm (để trống để xem tất cả)",
+    limit="Số lượng hiển thị (1–25, mặc định 10)",
+)
+async def cmd_top_upload(
+    interaction: discord.Interaction,
+    tags: str = "",
+    limit: app_commands.Range[int, 1, 25] = 10,
+):
+    await interaction.response.defer()
+    try:
+        clean_tags = tags.strip()
+        total_posts = await bot.booru.get_post_count(tags=clean_tags)
+        report = await bot.booru.get_top_uploaders(tags=clean_tags, limit=limit)
+        if not report:
+            await interaction.followup.send(
+                embed=error_embed("Không có dữ liệu", f"Không tìm thấy báo cáo cho `{clean_tags or '(tất cả)'}`.")
+            )
+            return
+
+        lines = []
+        for i, row in enumerate(report, start=1):
+            uname = row.get("uploader", "Unknown")
+            posts_cnt = row.get("posts", 0)
+            pct = (posts_cnt / total_posts * 100) if total_posts > 0 else 0
+            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"`#{i:<2}`")
+            lines.append(f"{medal} **{uname}** — {posts_cnt:,} bài ({pct:.2f}%)")
+
+        desc = f"🔍 Tag: `{clean_tags or '(tất cả)'}` • Tổng: **{total_posts:,} bài**\n\n" + "\n".join(lines)
+        embed = discord.Embed(
+            title="🏆 Bảng xếp hạng Top Uploaders",
+            description=desc,
+            color=0xFFD700,
+        )
+        report_url = f"{BOORU_URL}/reports/posts?search[group]=uploader&search[tags]={clean_tags}" if clean_tags else f"{BOORU_URL}/reports/posts"
+        embed.url = report_url
+        embed.set_footer(text=f"danbooru • {BOORU_URL}")
+        await interaction.followup.send(embed=embed)
+    except DanbooruError as e:
+        await interaction.followup.send(embed=error_embed("Lỗi API", e.message))
+    except Exception as e:
+        log.exception("Lỗi /top_upload tags=%s", tags)
         await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
 
 
@@ -527,6 +597,9 @@ async def cmd_say(interaction: discord.Interaction, message: str):
 
 @cmd_posts.autocomplete("tags")
 @cmd_random.autocomplete("tags")
+@cmd_related_tags.autocomplete("tags")
+@cmd_related.autocomplete("tags")
+@cmd_top_upload.autocomplete("tags")
 async def autocomplete_tags(interaction: discord.Interaction, current: str):
     if not current or len(current) < 2:
         return []
