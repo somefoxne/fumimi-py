@@ -97,14 +97,13 @@ cp .env.example .env
 Edit `.env` with your credentials:
 
 ```dotenv
-# Required
 DISCORD_TOKEN=your_discord_bot_token_here
+DISCORD_CLIENT_ID=your_client_id_here
 
-# Optional: Danbooru API credentials (increases rate limits)
-DANBOORU_USERNAME=your_username
-DANBOORU_API_KEY=your_api_key
+BOORU_URL=https://danbooru.donmai.us
+BOORU_USER=your_danbooru_username
+BOORU_API_KEY=your_danbooru_api_key
 
-# Optional: Testing with Testbooru
 TEST_MODE=false
 ```
 
