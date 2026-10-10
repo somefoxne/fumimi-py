@@ -37,6 +37,7 @@ from danbooru_client import DanbooruClient, DanbooruError
 from embeds import (
     post_embed, tag_embed, popular_embed,
     error_embed, info_embed, truncate,
+    prepare_post_display, PostView, MultiPostView,
 )
 
 # ── Cấu hình ───────────────────────────────────────────────────────────────────
@@ -139,8 +140,13 @@ async def cmd_post(interaction: discord.Interaction, post_id: int):
     await interaction.response.defer()
     try:
         post = await bot.booru.get_post(post_id)
-        embed = post_embed(post, BOORU_URL)
-        await interaction.followup.send(embed=embed)
+        session = await bot.booru._get_session()
+        embed, file = await prepare_post_display(post, interaction.channel, BOORU_URL, session)
+        view = PostView(post, BOORU_URL)
+        if file:
+            await interaction.followup.send(embed=embed, file=file, view=view)
+        else:
+            await interaction.followup.send(embed=embed, view=view)
     except DanbooruError as e:
         await interaction.followup.send(embed=error_embed("Không tìm thấy post", e.message))
     except Exception as e:
@@ -169,12 +175,24 @@ async def cmd_posts(
                 embed=error_embed("Không có kết quả", f"Không tìm thấy post nào cho `{tags or '(tất cả)'}`.")
             )
             return
-        embeds = [post_embed(p, BOORU_URL) for p in posts]
+        session = await bot.booru._get_session()
+        embeds = []
+        files = []
+        for p in posts:
+            emb, f = await prepare_post_display(p, interaction.channel, BOORU_URL, session)
+            embeds.append(emb)
+            if f:
+                files.append(f)
+        view = MultiPostView(posts, BOORU_URL) if len(posts) > 1 else PostView(posts[0], BOORU_URL)
         label = f"`{tags}`" if tags else "*(tất cả)*"
-        await interaction.followup.send(
-            content=f"🔍 Tìm thấy {len(posts)} kết quả cho {label} (trang {page})",
-            embeds=embeds,
-        )
+        send_kwargs = {
+            "content": f"🔍 Tìm thấy {len(posts)} kết quả cho {label} (trang {page})",
+            "embeds": embeds,
+            "view": view,
+        }
+        if files:
+            send_kwargs["files"] = files
+        await interaction.followup.send(**send_kwargs)
     except DanbooruError as e:
         await interaction.followup.send(embed=error_embed("Lỗi API", e.message))
     except Exception as e:
@@ -189,12 +207,23 @@ async def cmd_random(interaction: discord.Interaction, tags: str = ""):
     await interaction.response.defer()
     try:
         post = await bot.booru.get_random_post(tags=tags)
-        embed = post_embed(post, BOORU_URL)
+        session = await bot.booru._get_session()
+        embed, file = await prepare_post_display(post, interaction.channel, BOORU_URL, session)
+        view = PostView(post, BOORU_URL)
         label = f" với tags `{tags}`" if tags else ""
-        await interaction.followup.send(
-            content=f"🎲 Post ngẫu nhiên{label}:",
-            embed=embed,
-        )
+        if file:
+            await interaction.followup.send(
+                content=f"🎲 Post ngẫu nhiên{label}:",
+                embed=embed,
+                file=file,
+                view=view,
+            )
+        else:
+            await interaction.followup.send(
+                content=f"🎲 Post ngẫu nhiên{label}:",
+                embed=embed,
+                view=view,
+            )
     except DanbooruError as e:
         await interaction.followup.send(embed=error_embed("Lỗi", e.message))
     except Exception as e:
@@ -250,11 +279,23 @@ async def cmd_popular(
             )
             return
         scale_label = {"day": "hôm nay", "week": "tuần này", "month": "tháng này"}.get(scale, scale)
-        embeds = [post_embed(p, BOORU_URL) for p in posts]
-        await interaction.followup.send(
-            content=f"🔥 **Posts phổ biến {scale_label}** ({date or 'hôm nay'}):",
-            embeds=embeds,
-        )
+        session = await bot.booru._get_session()
+        embeds = []
+        files = []
+        for p in posts:
+            emb, f = await prepare_post_display(p, interaction.channel, BOORU_URL, session)
+            embeds.append(emb)
+            if f:
+                files.append(f)
+        view = MultiPostView(posts, BOORU_URL) if len(posts) > 1 else PostView(posts[0], BOORU_URL)
+        send_kwargs = {
+            "content": f"🔥 **Posts phổ biến {scale_label}** ({date or 'hôm nay'}):",
+            "embeds": embeds,
+            "view": view,
+        }
+        if files:
+            send_kwargs["files"] = files
+        await interaction.followup.send(**send_kwargs)
     except DanbooruError as e:
         await interaction.followup.send(embed=error_embed("Lỗi API", e.message))
     except Exception as e:
@@ -482,16 +523,31 @@ async def on_message(message: discord.Message):
     matches = POST_URL_RE.findall(message.content)
     if matches:
         embeds = []
+        files = []
+        fetched_posts = []
+        session = await bot.booru._get_session()
         for post_id_str in matches[:3]:  # tối đa 3 embed mỗi tin
             try:
                 post = await bot.booru.get_post(int(post_id_str))
-                embeds.append(post_embed(post, BOORU_URL))
+                emb, f = await prepare_post_display(post, message.channel, BOORU_URL, session)
+                embeds.append(emb)
+                if f:
+                    files.append(f)
+                fetched_posts.append(post)
             except DanbooruError as e:
                 log.warning("Không embed được post %s: %s", post_id_str, e.message)
             except Exception as e:
                 log.warning("Lỗi embed post %s: %s", post_id_str, e)
         if embeds:
-            await message.reply(embeds=embeds, mention_author=False)
+            view = MultiPostView(fetched_posts, BOORU_URL) if len(fetched_posts) > 1 else PostView(fetched_posts[0], BOORU_URL)
+            reply_kwargs = {
+                "embeds": embeds,
+                "view": view,
+                "mention_author": False,
+            }
+            if files:
+                reply_kwargs["files"] = files
+            await message.reply(**reply_kwargs)
 
     await bot.process_commands(message)
 
