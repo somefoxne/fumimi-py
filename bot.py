@@ -30,7 +30,8 @@ import logging
 import asyncio
 import discord
 from discord import app_commands
-from discord.ext import commands
+import unicodedata
+import urllib.parse
 from dotenv import load_dotenv
 
 from danbooru_client import DanbooruClient, DanbooruError
@@ -436,68 +437,145 @@ async def cmd_related(
     await _handle_related_tags(interaction, tags, category)
 
 
-# ── /top_upload ───────────────────────────────────────────────────────────────
-@bot.tree.command(name="top_upload", description="Bảng xếp hạng những người tải lên nhiều nhất")
+# ── Bảng hiển thị Box Drawing cho Top Uploaders ─────────────────────────────────
+def str_display_width(s: str) -> int:
+    """Tính độ rộng hiển thị thực tế (xử lý ký tự Unicode/Kanji/Wide chiếm 2 ô)."""
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in str(s))
+
+
+def pad_display(s: str, w: int) -> str:
+    """Căn lề trái có tính đến ký tự độ rộng kép."""
+    s_str = str(s)
+    return s_str + " " * max(0, w - str_display_width(s_str))
+
+
+def truncate_display(s: str, max_w: int = 19) -> str:
+    """Cắt ngắn chuỗi nếu quá dài để không làm vỡ khung bảng."""
+    s_str = str(s)
+    if str_display_width(s_str) <= max_w:
+        return s_str
+    cur = ""
+    for ch in s_str:
+        if str_display_width(cur + ch) + 1 > max_w:
+            return cur + "…"
+        cur += ch
+    return cur
+
+
+def render_top_uploaders_table(headers: list[str], rows: list[list[str]]) -> str:
+    """Tạo bảng ASCII box-drawing giống 100% định dạng của Fumimi Ruby bot."""
+    clean_rows = []
+    for r in rows:
+        clean_row = []
+        for i, cell in enumerate(r):
+            c_str = str(cell)
+            if i == 0:
+                c_str = truncate_display(c_str, 19)
+            clean_row.append(c_str)
+        clean_rows.append(clean_row)
+
+    col_widths = []
+    for i, h in enumerate(headers):
+        max_w = str_display_width(h)
+        for r in clean_rows:
+            if i < len(r):
+                max_w = max(max_w, str_display_width(r[i]))
+        col_widths.append(max_w)
+
+    top = "┌" + "┬".join("─" * (w + 2) for w in col_widths) + "┐"
+    header_line = "│" + "│".join(f" {pad_display(h, w)} " for h, w in zip(headers, col_widths)) + "│"
+    mid = "├" + "┼".join("─" * (w + 2) for w in col_widths) + "┤"
+    row_lines = [
+        "│" + "│".join(f" {pad_display(val, w)} " for val, w in zip(r, col_widths)) + "│"
+        for r in clean_rows
+    ]
+    bot = "└" + "┴".join("─" * (w + 2) for w in col_widths) + "┘"
+
+    table_content = "\n".join([top, header_line, mid] + row_lines + [bot])
+    forced_width = "-" * 80
+    return f"```\n{table_content}\n```\n{forced_width}"
+
+
+async def _handle_top_uploaders(interaction: discord.Interaction, tags: str = "", limit: int = 25):
+    await interaction.response.defer()
+    try:
+        clean_tags = tags.strip()
+        api_limit = 25 if (limit == 0 or limit is None) else limit
+
+        total_posts = await bot.booru.get_post_count(tags=clean_tags)
+        report = await bot.booru.get_top_uploaders(tags=clean_tags, limit=api_limit)
+
+        report_url = f"{BOORU_URL}/reports/posts?search[group]=uploader&search[group_limit]=25"
+        if clean_tags:
+            report_url += f"&search[tags]={urllib.parse.quote(clean_tags)}"
+
+        if not report or total_posts == 0:
+            tag_desc = f"Report for tags: `{clean_tags}`.\n\n" if clean_tags else ""
+            embed = discord.Embed(
+                title="Top Uploaders Report",
+                url=report_url,
+                description=f"{tag_desc}No posts under that search!",
+                color=0x206694,
+                timestamp=discord.utils.utcnow(),
+            )
+            await interaction.followup.send(embed=embed)
+            return
+
+        headers = ["Name", "Uploads", "%"]
+        rows = []
+        for row in report:
+            uname = row.get("uploader", "Unknown")
+            posts_cnt = row.get("posts", 0)
+            pct = (posts_cnt / total_posts * 100) if total_posts > 0 else 0
+            rows.append([uname, f"{posts_cnt:,}", f"{pct:.2f}"])
+
+        table_str = render_top_uploaders_table(headers, rows)
+
+        desc_parts = ["Results may be cached for 1 hour."]
+        if clean_tags:
+            desc_parts.append(f"Report for tags: `{clean_tags}`.")
+        desc_parts.append(table_str)
+
+        embed = discord.Embed(
+            title="Top Uploaders Report",
+            url=report_url,
+            description="\n".join(desc_parts),
+            color=0x206694,
+            timestamp=discord.utils.utcnow(),
+        )
+
+        await interaction.followup.send(embed=embed)
+    except DanbooruError as e:
+        await interaction.followup.send(embed=error_embed("Lỗi API", e.message))
+    except Exception as e:
+        log.exception("Lỗi /top_uploaders tags=%s", tags)
+        await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
+
+
+@bot.tree.command(name="top_uploaders", description="Show top uploaders for a tag search.")
 @app_commands.describe(
-    tags="Tag tìm kiếm (để trống để xem tất cả)",
-    limit="Số lượng hiển thị (đặt 0 để mở toàn bộ danh sách, mặc định 10)",
+    tags="Tags to search for.",
+    limit="Number of uploaders to show (default: 25).",
+)
+async def cmd_top_uploaders(
+    interaction: discord.Interaction,
+    tags: str = "",
+    limit: app_commands.Range[int, 0, 25] = 25,
+):
+    await _handle_top_uploaders(interaction, tags, limit)
+
+
+@bot.tree.command(name="top_upload", description="Show top uploaders for a tag search (alias).")
+@app_commands.describe(
+    tags="Tags to search for.",
+    limit="Number of uploaders to show (default: 25).",
 )
 async def cmd_top_upload(
     interaction: discord.Interaction,
     tags: str = "",
-    limit: app_commands.Range[int, 0, 100] = 10,
+    limit: app_commands.Range[int, 0, 25] = 25,
 ):
-    await interaction.response.defer()
-    try:
-        clean_tags = tags.strip()
-        is_full = (limit == 0)
-        api_limit = 100 if is_full else limit
-
-        total_posts = await bot.booru.get_post_count(tags=clean_tags)
-        report = await bot.booru.get_top_uploaders(tags=clean_tags, limit=api_limit)
-        if not report:
-            await interaction.followup.send(
-                embed=error_embed("Không có dữ liệu", f"Không tìm thấy báo cáo cho `{clean_tags or '(tất cả)'}`.")
-            )
-            return
-
-        lines = []
-        for i, row in enumerate(report, start=1):
-            uname = row.get("uploader", "Unknown")
-            posts_cnt = row.get("posts", 0)
-            pct = (posts_cnt / total_posts * 100) if total_posts > 0 else 0
-            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"`#{i:<2}`")
-            lines.append(f"{medal} **{uname}** — {posts_cnt:,} bài ({pct:.2f}%)")
-
-        report_url = f"{BOORU_URL}/reports/posts?search[group]=uploader&search[tags]={clean_tags}" if clean_tags else f"{BOORU_URL}/reports/posts"
-
-        # Nếu danh sách dài (khi limit = 0), chia theo block 25 người mỗi embed để hiển thị đẹp mắt
-        chunk_size = 25
-        embeds = []
-        total_chunks = (len(lines) + chunk_size - 1) // chunk_size
-
-        for chunk_idx in range(0, len(lines), chunk_size):
-            chunk = lines[chunk_idx:chunk_idx + chunk_size]
-            title = "🏆 Bảng xếp hạng Top Uploaders"
-            if total_chunks > 1:
-                title += f" (Trang {chunk_idx // chunk_size + 1}/{total_chunks})"
-
-            desc = f"🔍 Tag: `{clean_tags or '(tất cả)'}` • Tổng: **{total_posts:,} bài**\n\n" + "\n".join(chunk)
-            embed = discord.Embed(
-                title=title,
-                url=report_url,
-                description=desc,
-                color=0xFFD700,
-            )
-            embed.set_footer(text=f"danbooru • {BOORU_URL} • {len(report)} người")
-            embeds.append(embed)
-
-        await interaction.followup.send(embeds=embeds[:10])
-    except DanbooruError as e:
-        await interaction.followup.send(embed=error_embed("Lỗi API", e.message))
-    except Exception as e:
-        log.exception("Lỗi /top_upload tags=%s", tags)
-        await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
+    await _handle_top_uploaders(interaction, tags, limit)
 
 
 # ── /comment ──────────────────────────────────────────────────────────────────
@@ -616,6 +694,7 @@ async def cmd_say(interaction: discord.Interaction, message: str):
 @cmd_random.autocomplete("tags")
 @cmd_related_tags.autocomplete("tags")
 @cmd_related.autocomplete("tags")
+@cmd_top_uploaders.autocomplete("tags")
 @cmd_top_upload.autocomplete("tags")
 async def autocomplete_tags(interaction: discord.Interaction, current: str):
     if not current or len(current) < 2:
