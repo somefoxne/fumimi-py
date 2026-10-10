@@ -561,14 +561,14 @@ async def on_ready():
     log.info("✅ Đăng nhập thành công: %s (ID: %s)", bot.user, bot.user.id)
     log.info("📡 Đang kết nối với %d server(s).", len(bot.guilds))
 
-    # Tự động đồng bộ vào từng server để xóa sạch command Ruby cũ và kích hoạt command mới tức thì
+    # Dọn dẹp các lệnh cấp guild để tránh bị trùng lặp (dupe) với lệnh global
     for guild in bot.guilds:
         try:
-            bot.tree.copy_global_to(guild=guild)
-            synced = await bot.tree.sync(guild=guild)
-            log.info("Đã đồng bộ %d lệnh mới cho server: %s (%d)", len(synced), guild.name, guild.id)
+            bot.tree.clear_commands(guild=guild)
+            await bot.tree.sync(guild=guild)
+            log.info("Đã xóa lệnh trùng lặp cấp guild cho server: %s (%d)", guild.name, guild.id)
         except Exception as e:
-            log.warning("Không thể sync cho server %s: %s", guild.name, e)
+            log.warning("Không thể dọn guild commands cho %s: %s", guild.name, e)
 
     await bot.change_presence(
         activity=discord.Activity(
@@ -581,30 +581,27 @@ async def on_ready():
 @bot.command(name="sync")
 async def cmd_manual_sync(ctx: commands.Context):
     """
-    Lệnh !sync: Dùng trong chat Discord để cưỡng chế dọn sạch command Ruby cũ
-    và cập nhật toàn bộ slash command mới ngay lập tức.
+    Lệnh !sync: Dùng trong chat Discord để dọn sạch lệnh trùng lặp (dupe)
+    và đồng bộ lại danh sách lệnh chuẩn.
     """
     if not ctx.author.guild_permissions.administrator and not await bot.is_owner(ctx.author):
         await ctx.send("❌ Bạn cần quyền Quản trị viên (Administrator) để dùng lệnh này.")
         return
 
-    msg = await ctx.send("🔄 Đang dọn sạch lệnh cũ từ bot Ruby và cập nhật lệnh mới...")
+    msg = await ctx.send("🔄 Đang dọn sạch lệnh trùng lặp và đồng bộ lại...")
     try:
-        # Xóa sạch các lệnh cũ của server
+        # Xóa toàn bộ lệnh riêng cấp server (guild commands) để không bị nhân đôi (dupe)
         bot.tree.clear_commands(guild=ctx.guild)
         await bot.tree.sync(guild=ctx.guild)
 
-        # Chép toàn bộ lệnh mới vào server này
-        bot.tree.copy_global_to(guild=ctx.guild)
-        synced = await bot.tree.sync(guild=ctx.guild)
-
-        # Đồng bộ global
-        await bot.tree.sync()
+        # Đồng bộ bộ lệnh chuẩn
+        synced = await bot.tree.sync()
 
         await msg.edit(
             content=(
-                f"✅ **Thành công!** Đã xóa sạch lệnh cũ và kích hoạt **{len(synced)}** lệnh mới cho server!\n"
-                f"*(Nếu chưa thấy đổi ngay, hãy bấm **Ctrl + R** trên Discord để làm mới bộ nhớ đệm nhé)*"
+                f"✅ **Thành công!** Đã xóa sạch lệnh bị trùng lặp (dupe)!\n"
+                f"Hiện tại chỉ còn duy nhất **{len(synced)}** lệnh chuẩn.\n"
+                f"*(Bấm **Ctrl + R** trên Discord để làm mới bộ nhớ đệm nếu chưa cập nhật ngay nhé)*"
             )
         )
     except Exception as e:
