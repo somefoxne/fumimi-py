@@ -149,6 +149,14 @@ async def cmd_post(interaction: discord.Interaction, post_id: int):
             await interaction.followup.send(embed=embed, view=view)
     except DanbooruError as e:
         await interaction.followup.send(embed=error_embed("Không tìm thấy post", e.message))
+    except discord.errors.HTTPException as e:
+        if e.code == 20009:
+            await interaction.followup.send(
+                content="🔞 **Nội dung nhạy cảm:** Discord đã chặn gửi nội dung này tại kênh thông thường. Vui lòng bật **Giới hạn độ tuổi (18+)** cho kênh hoặc bấm nút Tải về bên dưới!",
+                view=view if 'view' in locals() else discord.utils.MISSING,
+            )
+        else:
+            await interaction.followup.send(embed=error_embed("Lỗi Discord", str(e)))
     except Exception as e:
         log.exception("Lỗi khi lấy post %s", post_id)
         await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
@@ -195,6 +203,14 @@ async def cmd_posts(
         await interaction.followup.send(**send_kwargs)
     except DanbooruError as e:
         await interaction.followup.send(embed=error_embed("Lỗi API", e.message))
+    except discord.errors.HTTPException as e:
+        if e.code == 20009:
+            await interaction.followup.send(
+                content="🔞 **Nội dung nhạy cảm:** Discord đã chặn hiển thị ảnh này tại kênh thông thường vì nội dung giới hạn độ tuổi. Vui lòng sử dụng tại kênh 18+ hoặc bấm nút Tải về bên dưới!",
+                view=view if 'view' in locals() else discord.utils.MISSING,
+            )
+        else:
+            await interaction.followup.send(embed=error_embed("Lỗi Discord", str(e)))
     except Exception as e:
         log.exception("Lỗi /posts tags=%s", tags)
         await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
@@ -226,6 +242,14 @@ async def cmd_random(interaction: discord.Interaction, tags: str = ""):
             )
     except DanbooruError as e:
         await interaction.followup.send(embed=error_embed("Lỗi", e.message))
+    except discord.errors.HTTPException as e:
+        if e.code == 20009:
+            await interaction.followup.send(
+                content="🔞 **Nội dung nhạy cảm:** Discord đã chặn gửi nội dung này tại kênh thông thường. Vui lòng bật **Giới hạn độ tuổi (18+)** cho kênh hoặc bấm nút Tải về bên dưới!",
+                view=view if 'view' in locals() else discord.utils.MISSING,
+            )
+        else:
+            await interaction.followup.send(embed=error_embed("Lỗi Discord", str(e)))
     except Exception as e:
         log.exception("Lỗi /random tags=%s", tags)
         await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
@@ -298,6 +322,14 @@ async def cmd_popular(
         await interaction.followup.send(**send_kwargs)
     except DanbooruError as e:
         await interaction.followup.send(embed=error_embed("Lỗi API", e.message))
+    except discord.errors.HTTPException as e:
+        if e.code == 20009:
+            await interaction.followup.send(
+                content="🔞 **Nội dung nhạy cảm:** Discord đã chặn hiển thị ảnh này tại kênh thông thường vì nội dung giới hạn độ tuổi. Vui lòng sử dụng tại kênh 18+ hoặc bấm nút Tải về bên dưới!",
+                view=view if 'view' in locals() else discord.utils.MISSING,
+            )
+        else:
+            await interaction.followup.send(embed=error_embed("Lỗi Discord", str(e)))
     except Exception as e:
         log.exception("Lỗi /popular scale=%s", scale)
         await interaction.followup.send(embed=error_embed("Lỗi", str(e)))
@@ -545,9 +577,20 @@ async def on_message(message: discord.Message):
                 "view": view,
                 "mention_author": False,
             }
-            if files:
-                reply_kwargs["files"] = files
-            await message.reply(**reply_kwargs)
+            try:
+                if files:
+                    reply_kwargs["files"] = files
+                await message.reply(**reply_kwargs)
+            except discord.errors.HTTPException as e:
+                if e.code == 20009:
+                    # Nếu Discord chặn gửi ảnh vì kênh thường
+                    await message.reply(
+                        content="🔞 **Nội dung nhạy cảm:** Discord đã chặn hiển thị trực tiếp ảnh này tại kênh thông thường vì nội dung 18+. Vui lòng dùng tại kênh Giới hạn độ tuổi hoặc bấm nút Tải về!",
+                        view=view,
+                        mention_author=False,
+                    )
+                else:
+                    log.warning("Lỗi gửi reply embed: %s", e)
 
     await bot.process_commands(message)
 

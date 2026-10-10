@@ -162,36 +162,21 @@ async def prepare_post_display(
     rating  = str(post.get("rating", "g")).lower()
     is_nsfw = is_nsfw_channel(channel)
 
-    needs_spoiler = (rating in ("q", "e")) and (not is_nsfw)
+    needs_hide = (rating in ("q", "e")) and (not is_nsfw)
 
-    if needs_spoiler:
-        img_url = _image_url(post)
-        if img_url and session and not session.closed:
-            try:
-                async with session.get(img_url, timeout=aiohttp.ClientTimeout(total=6)) as resp:
-                    if resp.status == 200:
-                        data = await resp.read()
-                        # Đuôi mở rộng
-                        ext = "jpg"
-                        if ".png" in img_url.lower():
-                            ext = "png"
-                        elif ".gif" in img_url.lower():
-                            ext = "gif"
-
-                        filename = f"SPOILER_post_{post_id}.{ext}"
-                        file = discord.File(io.BytesIO(data), filename=filename)
-                        embed = post_embed(post, booru_url, spoiler_filename=filename)
-                        return embed, file
-            except Exception:
-                pass
-
-        # Fallback nếu tải ảnh thất bại nhưng vẫn cần che
+    if needs_hide:
+        # Ở kênh thường (không phải 18+), Discord có bộ lọc tự động (lỗi 20009)
+        # cấm bot gửi file ảnh người lớn. Do đó ta ẩn ảnh và dẫn link/nút tải về an toàn.
         embed = post_embed(post, booru_url)
         embed.set_image(url=None)
-        embed.description = "⚠️ **Nội dung nhạy cảm (Rating Q/E)**\n*Ảnh được ẩn do kênh chưa bật Giới hạn độ tuổi. Nhấn nút Tải về bên dưới để xem.*"
+        embed.description = (
+            "🔞 **Nội dung giới hạn độ tuổi (Rating Q/E)**\n"
+            "*Ảnh đã bị ẩn do kênh này chưa bật **Giới hạn độ tuổi (18+)**.\n"
+            "Hãy bật cài đặt 18+ cho kênh hoặc nhấn nút **Tải về** bên dưới để xem.*"
+        )
         return embed, None
 
-    # Bình thường
+    # Kênh 18+ hoặc post an toàn (Rating G/S) -> hiển thị ảnh bình thường
     return post_embed(post, booru_url), None
 
 
