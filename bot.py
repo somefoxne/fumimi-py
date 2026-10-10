@@ -440,18 +440,21 @@ async def cmd_related(
 @bot.tree.command(name="top_upload", description="Bảng xếp hạng những người tải lên nhiều nhất")
 @app_commands.describe(
     tags="Tag tìm kiếm (để trống để xem tất cả)",
-    limit="Số lượng hiển thị (1–25, mặc định 10)",
+    limit="Số lượng hiển thị (đặt 0 để mở toàn bộ danh sách, mặc định 10)",
 )
 async def cmd_top_upload(
     interaction: discord.Interaction,
     tags: str = "",
-    limit: app_commands.Range[int, 1, 25] = 10,
+    limit: app_commands.Range[int, 0, 100] = 10,
 ):
     await interaction.response.defer()
     try:
         clean_tags = tags.strip()
+        is_full = (limit == 0)
+        api_limit = 100 if is_full else limit
+
         total_posts = await bot.booru.get_post_count(tags=clean_tags)
-        report = await bot.booru.get_top_uploaders(tags=clean_tags, limit=limit)
+        report = await bot.booru.get_top_uploaders(tags=clean_tags, limit=api_limit)
         if not report:
             await interaction.followup.send(
                 embed=error_embed("Không có dữ liệu", f"Không tìm thấy báo cáo cho `{clean_tags or '(tất cả)'}`.")
@@ -466,16 +469,30 @@ async def cmd_top_upload(
             medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"`#{i:<2}`")
             lines.append(f"{medal} **{uname}** — {posts_cnt:,} bài ({pct:.2f}%)")
 
-        desc = f"🔍 Tag: `{clean_tags or '(tất cả)'}` • Tổng: **{total_posts:,} bài**\n\n" + "\n".join(lines)
-        embed = discord.Embed(
-            title="🏆 Bảng xếp hạng Top Uploaders",
-            description=desc,
-            color=0xFFD700,
-        )
         report_url = f"{BOORU_URL}/reports/posts?search[group]=uploader&search[tags]={clean_tags}" if clean_tags else f"{BOORU_URL}/reports/posts"
-        embed.url = report_url
-        embed.set_footer(text=f"danbooru • {BOORU_URL}")
-        await interaction.followup.send(embed=embed)
+
+        # Nếu danh sách dài (khi limit = 0), chia theo block 25 người mỗi embed để hiển thị đẹp mắt
+        chunk_size = 25
+        embeds = []
+        total_chunks = (len(lines) + chunk_size - 1) // chunk_size
+
+        for chunk_idx in range(0, len(lines), chunk_size):
+            chunk = lines[chunk_idx:chunk_idx + chunk_size]
+            title = "🏆 Bảng xếp hạng Top Uploaders"
+            if total_chunks > 1:
+                title += f" (Trang {chunk_idx // chunk_size + 1}/{total_chunks})"
+
+            desc = f"🔍 Tag: `{clean_tags or '(tất cả)'}` • Tổng: **{total_posts:,} bài**\n\n" + "\n".join(chunk)
+            embed = discord.Embed(
+                title=title,
+                url=report_url,
+                description=desc,
+                color=0xFFD700,
+            )
+            embed.set_footer(text=f"danbooru • {BOORU_URL} • {len(report)} người")
+            embeds.append(embed)
+
+        await interaction.followup.send(embeds=embeds[:10])
     except DanbooruError as e:
         await interaction.followup.send(embed=error_embed("Lỗi API", e.message))
     except Exception as e:
