@@ -118,10 +118,7 @@ python bot.py
 
 ## Maintenance & Troubleshooting
 
-- **Duplicate Slash Commands:**
-  Discord may cache commands registered at both guild and global scopes. Simply send `!sync` in any channel where the bot has access, or press `Ctrl + R` in Discord to refresh your client cache.
-- **Explicit Content Filter (Error 20009):**
-  In non-NSFW channels, Fumimi automatically replaces direct image attachments of Rating Q/E posts with a spoiler warning and a direct download button. Enable the **Age-Restricted Channel (18+)** toggle on your Discord channel settings for full inline image previews.
+Ai slop
 
 ---
 
