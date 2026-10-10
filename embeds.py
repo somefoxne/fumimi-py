@@ -287,3 +287,64 @@ def truncate(text: str, max_len: int = 1024) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 1] + "…"
+
+
+# ── Bảng hiển thị Box Drawing ASCII (giống Fumimi Ruby) ────────────────────────
+import unicodedata
+
+def str_display_width(s: str) -> int:
+    """Tính độ rộng hiển thị thực tế (xử lý ký tự Unicode/Kanji/Wide chiếm 2 ô)."""
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in str(s))
+
+
+def pad_display(s: str, w: int) -> str:
+    """Căn lề trái có tính đến ký tự độ rộng kép."""
+    s_str = str(s)
+    return s_str + " " * max(0, w - str_display_width(s_str))
+
+
+def truncate_display(s: str, max_w: int = 19) -> str:
+    """Cắt ngắn chuỗi nếu quá dài để không làm vỡ khung bảng."""
+    s_str = str(s)
+    if str_display_width(s_str) <= max_w:
+        return s_str
+    cur = ""
+    for ch in s_str:
+        if str_display_width(cur + ch) + 1 > max_w:
+            return cur + "…"
+        cur += ch
+    return cur
+
+
+def render_top_uploaders_table(headers: list[str], rows: list[list[str]]) -> str:
+    """Tạo bảng ASCII box-drawing giống 100% định dạng của Fumimi Ruby bot."""
+    clean_rows = []
+    for r in rows:
+        clean_row = []
+        for i, cell in enumerate(r):
+            c_str = str(cell)
+            if i == 0:
+                c_str = truncate_display(c_str, 19)
+            clean_row.append(c_str)
+        clean_rows.append(clean_row)
+
+    col_widths = []
+    for i, h in enumerate(headers):
+        max_w = str_display_width(h)
+        for r in clean_rows:
+            if i < len(r):
+                max_w = max(max_w, str_display_width(r[i]))
+        col_widths.append(max_w)
+
+    top = "┌" + "┬".join("─" * (w + 2) for w in col_widths) + "┐"
+    header_line = "│" + "│".join(f" {pad_display(h, w)} " for h, w in zip(headers, col_widths)) + "│"
+    mid = "├" + "┼".join("─" * (w + 2) for w in col_widths) + "┤"
+    row_lines = [
+        "│" + "│".join(f" {pad_display(val, w)} " for val, w in zip(r, col_widths)) + "│"
+        for r in clean_rows
+    ]
+    bot = "└" + "┴".join("─" * (w + 2) for w in col_widths) + "┘"
+
+    table_content = "\n".join([top, header_line, mid] + row_lines + [bot])
+    forced_width = "-" * 80
+    return f"```\n{table_content}\n```\n{forced_width}"
