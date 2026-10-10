@@ -1,4 +1,4 @@
-# Fumimi Discord Bot (Python) 🌸
+# Fumimi Discord Bot (Python)
 
 A modern Python rewrite of the official [danbooru/fumimi-discord](https://github.com/danbooru/fumimi-discord) bot, built with **discord.py 2.x**, **aiohttp**, and the Danbooru REST API.
 
@@ -6,22 +6,9 @@ Modularized with the standard Discord Cog architecture, feature-rich, and ready 
 
 ---
 
-## ✨ Features
+## Slash Commands
 
-- 🖼️ **Post Searching & Browsing**: Search by tags, view by post ID, get random posts, or browse daily/weekly/monthly popular posts.
-- 📥 **Direct Download Buttons**: Every post embed includes interactive buttons linking directly to the full-resolution image and Danbooru page.
-- 🔞 **Discord 20009 Explicit Content Protection**: Intelligently hides/spoilers Questionable (Q) and Explicit (E) rated images in non-NSFW channels to prevent Discord API webhook rejections.
-- 📊 **Top Uploaders ASCII Box-Drawing Table**: Faithful 100% replica of the original Ruby Fumimi `/top_uploaders` report table format with double-width East Asian character alignment.
-- 🏷️ **Tag & Wiki Lookups**: Detailed tag metadata, category badges, wiki extracts, and cosine similarity related tag discovery.
-- 💬 **Discussions & Comments**: Read recent post comments and search Danbooru forum topics.
-- ⚡ **Auto-Embed Links**: Automatically parses Danbooru post URLs pasted into Discord chat and enriches them with preview embeds and buttons.
-- 🔄 **Anti-Duplicate Command Sync**: Administrative `!sync` command to wipe stale guild-level slash command registrations and keep your command menu clean.
-
----
-
-## 📋 Slash Commands
-
-### 🖼️ Posts (`cogs/posts.py`)
+### Posts (`cogs/posts.py`)
 | Command | Description |
 |---|---|
 | `/posts [tags] [limit]` | Search posts by tags with autocomplete *(limit: 1–10, default: 3)* |
@@ -29,26 +16,26 @@ Modularized with the standard Discord Cog architecture, feature-rich, and ready 
 | `/random [tags]` | Fetch a random post matching optional tags |
 | `/popular [scale] [date]` | Browse top posts by timeframe (`day`, `week`, `month`) |
 
-### 🏷️ Tags & Wiki (`cogs/tags.py`)
+### Tags & Wiki (`cogs/tags.py`)
 | Command | Description |
 |---|---|
 | `/tag <name>` | Look up tag metadata, category, post count, and wiki summary |
 | `/related_tags <tags> [category]` | Discover related tags with cosine similarity score |
 | `/related <tags> [category]` | Shorthand alias for `/related_tags` |
 
-### 📊 Reports & Stats (`cogs/reports.py`)
+### Reports & Stats (`cogs/reports.py`)
 | Command | Description |
 |---|---|
 | `/top_uploaders [tags] [limit]` | Display ASCII box-drawing table of top 25 uploaders for a tag query |
 | `/count [tags]` | Count total matching posts on Danbooru |
 
-### 💬 Forum & Comments (`cogs/forum.py`)
+### Forum & Comments (`cogs/forum.py`)
 | Command | Description |
 |---|---|
 | `/comment <post_id>` | Show the latest 5 comments on a specific post |
 | `/forum [query]` | Search Danbooru forum topics |
 
-### 🛠️ Utilities (`cogs/utility.py`)
+### Utilities (`cogs/utility.py`)
 | Command | Description |
 |---|---|
 | `/hi` | Greet the bot |
@@ -58,7 +45,7 @@ Modularized with the standard Discord Cog architecture, feature-rich, and ready 
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```text
 fumimi-py/
@@ -78,7 +65,7 @@ fumimi-py/
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### 1. Prerequisites
 - Python 3.10+
@@ -129,16 +116,16 @@ python bot.py
 
 ---
 
-## 🔧 Maintenance & Troubleshooting
+## Maintenance & Troubleshooting
 
-- **Duplicate Slash Commands?**
+- **Duplicate Slash Commands:**
   Discord may cache commands registered at both guild and global scopes. Simply send `!sync` in any channel where the bot has access, or press `Ctrl + R` in Discord to refresh your client cache.
 - **Explicit Content Filter (Error 20009):**
   In non-NSFW channels, Fumimi automatically replaces direct image attachments of Rating Q/E posts with a spoiler warning and a direct download button. Enable the **Age-Restricted Channel (18+)** toggle on your Discord channel settings for full inline image previews.
 
 ---
 
-## 📜 License & Credits
+## License & Credits
 
 - Original Ruby implementation: [danbooru/fumimi-discord](https://github.com/danbooru/fumimi-discord)
 - Danbooru API Documentation: [danbooru.donmai.us/wiki_pages/help:api](https://danbooru.donmai.us/wiki_pages/help:api)
