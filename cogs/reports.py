@@ -50,6 +50,22 @@ class ReportCommands(commands.Cog, name="Reports"):
             count = await self.bot.booru.get_post_count(tags=tags)
             label = f"`{tags}`" if tags else "tất cả posts"
             search_url = f"{self.booru_url}/posts?tags={tags}" if tags else f"{self.booru_url}/posts"
+
+            if count is None:
+                embed = discord.Embed(
+                    title="📊 Không thể đếm số lượng post",
+                    description=(
+                        f"⚠️ Danbooru bị timeout khi tính toán số lượng cho {label}.\n\n"
+                        f"**Nguyên nhân:** Các truy vấn tìm kiếm chứa thẻ phủ định (`-`) hoặc ký tự đại diện (`*`) "
+                        f"quá tốn kém để cơ sở dữ liệu đếm chính xác.\n"
+                        f"🔗 [Bấm vào đây để xem kết quả bài đăng trên Danbooru]({search_url})"
+                    ),
+                    color=0xFEE75C,
+                )
+                embed.set_footer(text=f"danbooru • {self.booru_url}")
+                await interaction.followup.send(embed=embed)
+                return
+
             embed = discord.Embed(
                 title="📊 Số lượng post",
                 description=f"**[{count:,} posts]({search_url})** khớp với {label}",
@@ -80,14 +96,15 @@ class ReportCommands(commands.Cog, name="Reports"):
             clean_tags = tags.strip()
             api_limit = 25 if (limit == 0 or limit is None) else limit
 
-            total_posts = await self.bot.booru.get_post_count(tags=clean_tags)
+            total_posts_raw = await self.bot.booru.get_post_count(tags=clean_tags)
+            total_posts = total_posts_raw or 0
             report = await self.bot.booru.get_top_uploaders(tags=clean_tags, limit=api_limit)
 
             report_url = f"{self.booru_url}/reports/posts?search[group]=uploader&search[group_limit]=25"
             if clean_tags:
                 report_url += f"&search[tags]={urllib.parse.quote(clean_tags)}"
 
-            if not report or total_posts == 0:
+            if not report:
                 tag_desc = f"Report for tags: `{clean_tags}`.\n\n" if clean_tags else ""
                 embed = discord.Embed(
                     title="Top Uploaders Report",
@@ -104,8 +121,8 @@ class ReportCommands(commands.Cog, name="Reports"):
             for row in report:
                 uname = row.get("uploader", "Unknown")
                 posts_cnt = row.get("posts", 0)
-                pct = (posts_cnt / total_posts * 100) if total_posts > 0 else 0
-                rows.append([uname, f"{posts_cnt:,}", f"{pct:.2f}"])
+                pct_str = f"{(posts_cnt / total_posts * 100):.2f}" if total_posts > 0 else "N/A"
+                rows.append([uname, f"{posts_cnt:,}", pct_str])
 
             table_str = render_top_uploaders_table(headers, rows)
 

@@ -90,9 +90,9 @@ class DanbooruClient:
     async def get_random_post(self, tags: str = "") -> dict:
         return await self.get("posts/random", {"tags": tags or None, "only": self.POST_FIELDS})
 
-    async def get_post_count(self, tags: str = "") -> int:
+    async def get_post_count(self, tags: str = "") -> Optional[int]:
         data = await self.get("counts/posts", {"tags": tags or None})
-        return data.get("counts", {}).get("posts", 0)
+        return data.get("counts", {}).get("posts")
 
     async def get_tag(self, name: str) -> dict | None:
         results = await self.get("tags", {"search[name]": name, "search[hide_empty]": "no", "only": "id,name,post_count,category,is_deprecated,antecedent_alias,wiki_page", "limit": 1})
