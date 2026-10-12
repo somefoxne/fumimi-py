@@ -6,6 +6,7 @@ Sử dụng file settings.py để quản lý cấu hình.
 """
 
 import asyncio
+import fnmatch
 import logging
 import aiohttp
 from typing import Any, Optional
@@ -95,109 +96,175 @@ class DanbooruClient:
         data = await self.get("counts/posts", {"tags": tags or None})
         return data.get("counts", {}).get("posts")
 
-    async def estimate_post_count(self, tags: str = "") -> Optional[int]:
-        """Ước tính số lượng post xấp xỉ khi counts/posts bị timeout.
-        Kết hợp 3 phương pháp tối ưu:
-        1. Vòng đời thực tế [min_id, max_id] qua page=a0 (loại bỏ thời kỳ trước khi tag ra đời).
-        2. Lấy mẫu phân tầng 5 mốc thời điểm với cỡ mẫu 100 bài mỗi mốc (Stratified Sampling).
-        3. Hiệu chỉnh theo tỷ lệ tag gốc (Base-Tag Ratio) nếu truy vấn có chứa tag dương độc lập.
-        """
-        try:
-            # 1. Lấy 100 bài mới nhất của truy vấn (Mốc 1)
-            p1 = await self.get("posts", {"tags": tags or None, "limit": 100, "only": "id"})
-            if not p1 or not isinstance(p1, list):
-                return 0
-            if len(p1) < 100:
-                return len(p1)
+    @staticmethod
+    def _matches_query(tag_string: str, query_tokens: list[str]) -> bool:
+        """Kiểm tra một bài viết có khớp toàn bộ cú pháp truy vấn của Danbooru hay không."""
+        if not tag_string:
+            return False
+        post_tags = set(tag_string.split())
+        or_tokens = []
 
-            max_id = p1[0].get("id")
-            if not max_id or max_id <= 0:
-                return len(p1)
-
-            # 2. Tìm bài cũ nhất (min_id) để xác định vòng đời thực tế [min_id, max_id]
-            min_id = 0
-            try:
-                p_oldest = await self.get("posts", {"tags": tags or None, "limit": 1, "page": "a0", "only": "id"})
-                if isinstance(p_oldest, list) and p_oldest:
-                    min_id = p_oldest[0].get("id", 0)
-            except Exception:
-                min_id = 0
-
-            if min_id <= 0 or min_id >= max_id:
-                min_id = 0
-
-            lifespan = max_id - min_id
-            num_intervals = 5
-            interval_width = lifespan / num_intervals
-
-            # Mật độ và ước tính cho khoảng 1 (mới nhất)
-            d1_delta = p1[0]["id"] - p1[-1]["id"]
-            if d1_delta > 0:
-                d1 = len(p1) / d1_delta
-                est_stratified = d1 * interval_width
+        for token in query_tokens:
+            if token.startswith("~"):
+                or_tokens.append(token[1:])
+            elif token.startswith("-"):
+                neg = token[1:]
+                if "*" in neg:
+                    if any(fnmatch.fnmatch(t, neg) for t in post_tags):
+                        return False
+                else:
+                    if neg in post_tags:
+                        return False
             else:
-                d1 = 0
-                est_stratified = float(len(p1))
+                pos = token
+                if "*" in pos:
+                    if not any(fnmatch.fnmatch(t, pos) for t in post_tags):
+                        return False
+                else:
+                    if pos not in post_tags:
+                        return False
 
-            # 3. Chuẩn bị các tác vụ song song: 4 mốc quá khứ + Base Tag (nếu có)
-            tasks = []
-            milestone_keys = []
+        if or_tokens:
+            has_or = False
+            for or_token in or_tokens:
+                if "*" in or_token:
+                    if any(fnmatch.fnmatch(t, or_token) for t in post_tags):
+                        has_or = True
+                        break
+                else:
+                    if or_token in post_tags:
+                        has_or = True
+                        break
+            if not has_or:
+                return False
 
-            for k in range(1, num_intervals):
-                target_id = int(max_id - k * interval_width)
-                tasks.append(
-                    self.get("posts", {"tags": tags or None, "limit": 100, "page": f"b{target_id}", "only": "id"})
-                )
-                milestone_keys.append("milestone")
+        return True
 
-            # Tìm Base Tag (tag dương không chứa wildcard hay metatag)
-            base_tag_candidate = None
-            for token in (tags or "").split():
-                if not token.startswith(("-", "~")) and not any(c in token for c in "*:"):
-                    base_tag_candidate = token
-                    break
+    async def _fetch_stratified_samples(self, tags: str = None, total_samples: int = 1000) -> list[dict]:
+        """Lấy 1,000 bài mẫu phân tầng qua các mốc lịch sử với trường only=id,tag_string."""
+        per_batch = 200
+        num_batches = max(total_samples // per_batch, 1)
 
+        # Mốc 1: bài mới nhất
+        first_batch = await self.get("posts", {"tags": tags or None, "limit": per_batch, "only": "id,tag_string"})
+        if not first_batch or not isinstance(first_batch, list):
+            return []
+        if len(first_batch) < per_batch:
+            return first_batch
+
+        max_id = first_batch[0].get("id")
+        if not max_id or max_id <= 0:
+            return first_batch
+
+        tasks = []
+        milestones = [0.8, 0.6, 0.4, 0.2][:num_batches - 1]
+        for frac in milestones:
+            target_id = int(max_id * frac)
+            tasks.append(
+                self.get("posts", {"tags": tags or None, "limit": per_batch, "page": f"b{target_id}", "only": "id,tag_string"})
+            )
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        all_posts = list(first_batch)
+        for res in results:
+            if isinstance(res, list) and res:
+                all_posts.extend(res)
+
+        return all_posts
+
+    async def _estimate_pure_or(self, tokens: list[str]) -> Optional[int]:
+        """Ước tính cho các truy vấn thuần OR (~tag1 ~tag2 ...) bằng nguyên lý Bao hàm - Loại trừ."""
+        tag_names = [t[1:] for t in tokens if not any(c in t for c in "*:")]
+        if not tag_names or len(tag_names) != len(tokens):
+            return None
+
+        # Lấy post_count chuẩn xác của từng tag từ cơ sở dữ liệu Danbooru
+        tag_infos = await asyncio.gather(*[self.get_tag(t) for t in tag_names], return_exceptions=True)
+        counts = {}
+        for i, info in enumerate(tag_infos):
+            if isinstance(info, dict) and info.get("post_count") is not None:
+                counts[tag_names[i]] = info["post_count"]
+            else:
+                return None
+
+        sum_counts = sum(counts.values())
+        if len(tag_names) == 1:
+            return sum_counts
+
+        # Đo độ trùng lặp (overlap) giữa các tag bằng mẫu 200 bài từ mỗi tag
+        sample_tasks = [
+            self.get("posts", {"tags": t, "limit": 200, "only": "id,tag_string"})
+            for t in tag_names
+        ]
+        sample_results = await asyncio.gather(*sample_tasks, return_exceptions=True)
+
+        overlap_ratios = []
+        for i, res in enumerate(sample_results):
+            if isinstance(res, list) and res:
+                other_tags = set(tag_names) - {tag_names[i]}
+                overlap_count = sum(1 for p in res if any(ot in set(p.get("tag_string", "").split()) for ot in other_tags))
+                overlap_ratios.append(overlap_count / len(res))
+
+        if overlap_ratios:
+            avg_overlap = sum(overlap_ratios) / len(overlap_ratios)
+            est_total = sum_counts * (1.0 - (avg_overlap * (len(tag_names) - 1) / len(tag_names)))
+            max_single = max(counts.values())
+            return max(int(est_total), max_single)
+
+        return sum_counts
+
+    async def estimate_post_count(self, tags: str = "") -> Optional[int]:
+        """Ước tính số lượng post xấp xỉ bằng phương pháp Monte Carlo / Stratified Sampling với cỡ mẫu 1,000 bài thực tế."""
+        try:
+            tokens = (tags or "").strip().split()
+            if not tokens:
+                return await self.get_post_count("")
+
+            # 1. Truy vấn thuần OR (~tag1 ~tag2 ...)
+            if all(t.startswith("~") for t in tokens) and len(tokens) <= 6:
+                est_or = await self._estimate_pure_or(tokens)
+                if est_or is not None:
+                    return est_or
+
+            # 2. Tìm Base Tag dương (không phủ định, không OR, không wildcard, không metatag)
+            base_tag = None
             base_count = None
-            if base_tag_candidate:
-                tasks.append(self.get_tag(base_tag_candidate))
-                milestone_keys.append("base_tag_info")
-                tasks.append(self.get("posts", {"tags": base_tag_candidate, "limit": 100, "only": "id"}))
-                milestone_keys.append("base_tag_posts")
+            pos_tokens = [t for t in tokens if not t.startswith(("-", "~")) and not any(c in t for c in "*:")]
 
-            # Chạy tất cả song song
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            if pos_tokens:
+                tag_infos = await asyncio.gather(*[self.get_tag(t) for t in pos_tokens], return_exceptions=True)
+                valid_candidates = []
+                for i, info in enumerate(tag_infos):
+                    if isinstance(info, dict) and info.get("post_count"):
+                        valid_candidates.append((pos_tokens[i], info["post_count"]))
 
-            # Xử lý kết quả các mốc quá khứ
-            for i, res in enumerate(results):
-                key = milestone_keys[i]
-                if key == "milestone" and isinstance(res, list) and res:
-                    if len(res) < 100:
-                        est_stratified += len(res)
-                    else:
-                        delta = res[0]["id"] - res[-1]["id"]
-                        if delta > 0:
-                            density = len(res) / delta
-                            est_stratified += density * interval_width
-                        else:
-                            est_stratified += len(res)
-                elif key == "base_tag_info" and isinstance(res, dict):
-                    base_count = res.get("post_count")
+                if valid_candidates:
+                    valid_candidates.sort(key=lambda x: x[1])
+                    base_tag, base_count = valid_candidates[0]
 
-            # 4. Hiệu chỉnh theo Base Tag
-            est_final = est_stratified
-            if base_count and base_count > 0:
-                base_posts_idx = milestone_keys.index("base_tag_posts")
-                base_posts = results[base_posts_idx]
-                if isinstance(base_posts, list) and len(base_posts) >= 10:
-                    base_delta = base_posts[0]["id"] - base_posts[-1]["id"]
-                    if base_delta > 0 and d1 > 0:
-                        d_base = len(base_posts) / base_delta
-                        ratio = d1 / d_base
-                        est_base = base_count * ratio
-                        est_final = (est_stratified + est_base) / 2
-                est_final = min(est_final, base_count)
+            sample_universe = base_tag if base_tag else None
+            total_universe_count = base_count if base_count else None
 
-            return max(int(est_final), len(p1))
+            if not total_universe_count:
+                total_universe_count = await self.get_post_count("")
+                if not total_universe_count:
+                    total_universe_count = 8_600_000
+
+            # 3. Lấy mẫu 1,000 bài thực tế từ universe (5 mốc x 200 bài)
+            posts_sample = await self._fetch_stratified_samples(sample_universe, total_samples=1000)
+            if not posts_sample:
+                return None
+
+            # 4. Lọc trực tiếp từng bài theo toàn bộ điều kiện query
+            matching_count = sum(1 for p in posts_sample if self._matches_query(p.get("tag_string", ""), tokens))
+
+            sample_ratio = matching_count / len(posts_sample)
+            estimated = int(total_universe_count * sample_ratio)
+
+            if base_count:
+                estimated = min(estimated, base_count)
+
+            return max(estimated, matching_count)
         except Exception as e:
             log.warning("Lỗi khi ước tính post count cho tags '%s': %s", tags, e)
             return None
