@@ -52,11 +52,18 @@ class ReportCommands(commands.Cog, name="Reports"):
             search_url = f"{self.booru_url}/posts?tags={tags}" if tags else f"{self.booru_url}/posts"
 
             if count is None:
+                estimated = await self.bot.booru.estimate_post_count(tags=tags)
+                if estimated is not None:
+                    est_str = f"📊 **Ước tính xấp xỉ:** `~{estimated:,}` posts *(dựa trên mật độ ID)*\n\n"
+                else:
+                    est_str = ""
+
                 embed = discord.Embed(
-                    title="📊 Không thể đếm số lượng post",
+                    title="📊 Không thể đếm số lượng post chính xác",
                     description=(
-                        f"⚠️ Danbooru bị timeout khi tính toán số lượng cho {label}.\n\n"
-                        f"**Nguyên nhân:** Các truy vấn tìm kiếm chứa thẻ phủ định (`-`) hoặc ký tự đại diện (`*`) "
+                        f"⚠️ Danbooru bị timeout khi tính toán số lượng chính xác cho {label}.\n\n"
+                        f"{est_str}"
+                        f"**Nguyên nhân:** Các truy vấn phức tạp hoặc chứa thẻ phủ định (`-`), ký tự đại diện (`*`) "
                         f"quá tốn kém để cơ sở dữ liệu đếm chính xác.\n"
                         f"🔗 [Bấm vào đây để xem kết quả bài đăng trên Danbooru]({search_url})"
                     ),
