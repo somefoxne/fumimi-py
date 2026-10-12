@@ -96,12 +96,10 @@ class UtilityCommands(commands.Cog, name="Utility"):
             )
 
     # ── /say ──────────────────────────────────────────────────────────────────
-    @app_commands.command(name="say", description="Cho Fumimi nói gì đó (cần quyền Manage Messages)")
+    @app_commands.command(name="say", description="Cho Fumimi nói gì đó")
     @app_commands.describe(message="Nội dung cần nói")
-    @app_commands.default_permissions(manage_messages=True)
     async def cmd_say(self, interaction: discord.Interaction, message: str):
-        await interaction.response.send_message("✅ Đã gửi!", ephemeral=True)
-        await interaction.channel.send(message)
+        await interaction.response.send_message(message)
 
     # ── !sync ─────────────────────────────────────────────────────────────────
     @commands.command(name="sync")
